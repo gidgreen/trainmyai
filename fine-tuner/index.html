@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<!--
+	TrainMyAI copyright (c) Gideon Greenspan 2023
+	License: GPLv3 + visible attribution
+	
+	This program is free software: you can redistribute it and/or modify it under the terms
+	of the GNU General Public License v3 as published by the Free Software Foundation. However,
+	all modified copies must contain a link back to the trainmy.ai website, shown at all times.
+	
+	This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+	without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+	
+	With thanks to the OpenAI team for creating GPT-3, giving it a clean API for fine tuning,
+	and enabling client-side API calls from the browser (cross-origin resource sharing).
+-->
+<html lang="en">
+
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>TrainMyAI Fine Tuner - Train a GPT-3 model with fine-tuning</title>
+		<meta name="description" content="Easy web interface to fine-tune GPT-3 for your company or application. Just provide a set of example prompts and responses, no coding required!">
+		
+		<style>
+			/* These two CSS styles are switched in the downloaded version. The pages are otherwise identical. */
+			.hidelocal {}
+			.showlocal {display:none;}
+			
+			header {display:flex; align-items:center; justify-content:space-between; padding:0.5em;}
+			body {font-family:trebuchet ms,sans-serif; font-size:18px; margin:0;}
+			a, a:visited {color:#009;}
+			#container {display:flex; flex-direction:column; min-height: 100vh;}
+			textarea {box-sizing:border-box;}
+			tr {width:100%;}
+			
+			h1 {font-family:georgia,serif; font-size:64px; font-weight:normal; text-shadow: #aaa 3px 3px 4px; margin:0 8px;}
+			h1 a, h1 a:visited {text-decoration:none; color:black;}
+			.toolname {font-family:georgia,serif; font-size:22px; text-align:center; text-shadow: #aaa 1px 1px 2px; margin-top:4px;}
+			#stages {text-align:right; margin:0;}
+			#stages li {display:inline-block; width:8em; text-align:center; margin:8px; padding-bottom:4px; border-bottom:8px solid #ccf;}
+			#stages a {color:#009; text-decoration:none;}
+			#stages li.selected {border-color:#66c;}
+			
+			#statusdiv {display:none; position:fixed; width:100%; height:100%; align-items:center; justify-content:center;}
+			#status {padding:0.5em; background:#fcc;}
+			
+			main {flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:1em;}
+			main > div {display:none;}
+			main > div.selected {display:table-cell; text-align:center;}
+			footer {font-size:80%; margin-top:2em; display:flex; align-items:flex-end; gap:1em; padding:0.5em;}
+			#footerleft {flex:1; text-align:left;}
+			#footerright {flex:1; text-align:right;}
+			
+			.banner {font-size:200%; margin-top:0;}
+			.steps {display:inline-block; text-align:left;}
+			.steps li {line-height:150%; margin-bottom:0.5em;}
+			.fineprint {font-size:80%;}
+			.warning {color:#c00; margin:1em 0;}
+			
+			#example {display:none; border-collapse: collapse; margin:1em auto;}
+			#example td {border:1px solid #ccc; padding:0.25em 0.5em;}
+			#hideexample {display:none;}
+			#trainraw, #review {width:100%; margin:0.5em 0;}
+			#trainraw {height:5em; padding:0.5em;}
+			#review {border:1px solid #ccc; border-collapse:collapse; padding:0 1px; max-height:20em; display:none; overflow-y:auto;}
+			#review th {border-bottom:1px solid #ccc; padding:0.25em 0.5em; background:white; position:sticky; top:0;}
+			#review td {border-top:1px solid #ccc; padding:0.25em 0.5em; max-width:25vw; vertical-align:top; font-size:75%; line-height:100%;}
+			#review .num {text-align:right;}
+			#postreview {display:none;}
+			#choosebase {display:none;}
+			#starttrain {display:none;}
+			#traincost {font-size:80%;}
+			
+			#tunings {border-collapse:collapse;}
+			#tunings th {padding:0.25em 0.5em;}
+			#tunings td {border:1px solid #ccc; padding:0.25em 0.5em;}
+			.helpcursor {cursor:help;}
+			
+			#query th {text-align:right; padding:0.25em 0.5em; vertical-align:top;}
+			#query td {text-align:left; padding:0.25em 0.5em; vertical-align:top;}
+			#prompt {width:480px; height:10em;}
+			#completion {width:480px; height:10em;}
+			#querycost {font-size:80%; display:none;}
+			
+			@media (max-width: 800px) {
+				h1 {font-size:48px;}
+			}
+				
+			@media (max-width: 640px) {
+				#prompt {width:320px;}
+				#completion {width:320px;}
+				#stages {font-size:80%;}
+				#stages li {margin-top:4px; margin-bottom:4px;}
+			}
+		</style>
+		
+		<script>
+		
+		//	Some constants you might want to change
+		
+			const prompt_end='\n\n###\n\n';
+			const completion_end='\n\n$$$';
+			
+			// see https://beta.openai.com/docs/api-reference/fine-tunes/create
+			const training_epochs=4;
+			
+			const training_cost={ // $ per 1000 tokens per epoch (based on https://openai.com/api/pricing/ in Dec 2022)
+				'ada': 0.0004,
+				'babbage': 0.0006,
+				'curie': 0.003,
+				'davinci': 0.03
+			};
+			
+			const query_cost={ // $ per 1000 tokens
+				'ada': 0.0016,
+				'babbage': 0.0024,
+				'curie': 0.012,
+				'davinci': 0.12
+			};
+			
+		
+		//	Global variables
+			
+			var haskey=false;
+			var tunings=[];
+			var modelbases={}; // map of model -> base model
+			var hasprogress=false;
+			var hasready=false;
+			var reviewtokens;
+			
+		
+		//	Page initialization
+							
+			async function load_page()
+			{
+				update_page();
+				await get_tunings();
+				
+				var trainraw=localStorage.getItem('trainmyai_trainraw_set');
+				if (trainraw) {
+					set_stage(2);
+					set_display('trainhelp', 'none');
+					get_element('trainraw').value=trainraw;
+					review_data();
+					localStorage.removeItem('trainmyai_trainraw_set');
+
+				} else
+					auto_stage();
+			}
+			
+			function auto_stage()
+			{
+				var stage=1;
+				
+				if (haskey) {
+					if (hasprogress)
+						stage=3;
+					else if (hasready)
+						stage=4;
+					else
+						stage=2;
+				}
+				
+				set_stage(stage);
+			}
+			
+			function set_stage(stage)
+			{
+				for (var s=1; s<=4; s++) {
+					get_element('link'+s).className=(s==stage) ? 'selected' : '';
+					get_element('content'+s).className=(s==stage) ? 'selected' : '';
+				}
+			}
+			
+			async function get_tunings()
+			{
+				if (haskey) {
+					set_status('Checking status...');
+				
+					var response=await (await fetch('https://api.openai.com/v1/fine-tunes', {
+						headers: {
+							'Authorization': api_authorization()
+						}
+					})).json();
+				
+					clear_status();
+				
+					if (response.data) {
+						tunings=response.data;
+						update_page();
+						
+					} else
+						report_api_error(response);
+				}
+			}
+			
+			function update_page()
+			{
+			//	Set global flags, build status page and models selector
+				
+				apikey=localStorage.getItem('trainmyai_openai_key');
+				haskey=apikey ? true : false;
+				hasprogress=false;
+				hasready=false;
+				
+			//	Build a couple of useful maps
+				
+				modelbases={}; // global variable map of model -> base model
+				var modelnames={}; // local variable map of fine tuned models -> display name
+				
+				for (var i=0; i<tunings.length; i++) {
+					var tuning=tunings[i];					
+					if (tuning.fine_tuned_model) {
+						modelbases[tuning.fine_tuned_model]=tuning.model;
+						modelnames[tuning.fine_tuned_model]=extract_name(tuning.training_files[0].filename, tuning.fine_tuned_model);
+					}
+				}
+				
+			//	Model lists in user interface
+				
+				var tbody=get_element('tuningsrows');
+				tbody.innerHTML='';
+				
+				var select=get_element('models');
+				var selected=select.value; // to restore after rebuilding
+				select.options.length=0;
+				
+				var base=get_element('basemodel');
+				var baseselected=base.value; // to restore after rebuilding
+				base.options.length=4;
+				
+				for (var i=tunings.length-1; i>=0; i--) { // reverse order
+					var tuning=tunings[i];
+					var date=new Date(tuning.created_at*1000); // timestamp in microseconds
+					
+					if ( (tuning.status=='pending') || (tuning.status=='running') )
+						hasprogress=true;
+					
+				//	Create row in 'check status' panel
+					
+					var row=tbody.insertRow(-1);
+					
+					var cell=row.insertCell(-1); // date
+					cell.innerText=date.toDateString();
+					
+					var cell=row.insertCell(-1); // time
+					cell.innerText=date.toLocaleTimeString();
+					
+					var cell=row.insertCell(-1); // model name
+					cell.innerText=extract_name(tuning.training_files[0].filename, '(none)');
+					
+					var cell=row.insertCell(-1); // base model
+					cell.innerText=title_case(modelnames[tuning.model] || tuning.model);
+					
+					var cell=row.insertCell(-1); // status
+					cell.className='helpcursor';
+					cell.title='Click to view last event';
+					cell.innerText=title_case(tuning.status);
+					
+					const index=i; // to bind the current value into the function below
+					cell.addEventListener('click', function() { debug_tuning(index); } );
+					
+				//	List model for use if ready
+					
+					if (tuning.fine_tuned_model) {
+						var name=modelnames[tuning.fine_tuned_model];
+						
+						select.options[select.options.length]=new Option(name, tuning.fine_tuned_model);
+						
+						if (selected==tuning.fine_tuned_model)
+							select.value=selected; // restore selection
+							
+						if (!hasready) { // is first one
+							var option=new Option('————————', '');
+							option.disabled=true;
+							base.options[base.options.length]=option;
+						}
+							
+						base.options[base.options.length]=new Option(
+							name+' ('+title_case(model_base_recursive(tuning.fine_tuned_model)+')'),
+							tuning.fine_tuned_model
+						);
+							
+						if (baseselected==tuning.fine_tuned_model)
+							base.value=baseselected; // restore selection
+
+						hasready=true;
+					}
+				}
+				
+				if (!hasready)
+					select.options[select.options.length]=new Option('(none available)', '');
+				
+			//	Update other items
+				
+				if (haskey)
+					get_element('oldkey').value=apikey;
+					
+				var elements=document.getElementsByClassName('haskey');
+				for (var i=0; i<elements.length; i++)
+					elements[i].style.display=haskey ? 'block' : 'none';
+				
+				var elements=document.getElementsByClassName('nokey');
+				for (var i=0; i<elements.length; i++)
+					elements[i].style.display=haskey ? 'none' : 'block';
+				
+				set_display('tunings', tunings.length ? 'inline-block' : 'none');
+				
+				get_element('respondbutton').disabled=!hasready;
+				get_element('trainbutton').disabled=!haskey;
+				get_element('refreshbutton').disabled=!haskey;
+			}
+			
+			
+		//	Panel 1: Enter key
+			
+			async function verify_key()
+			{
+				var key=get_element('newkey').value.trim();
+				
+				if (key.length<8) {
+					report_error('Please enter the full key');
+					return;
+				}
+				
+				set_status('Verifying key...');
+				
+				var response=await (await fetch('https://api.openai.com/v1/fine-tunes', {
+					headers: {
+						'Authorization': 'Bearer '+key
+					}
+				})).json();
+				
+				clear_status();
+				
+				if (response.data) {
+					report_success('Thank you. Your key has been verified and stored locally in your browser.');
+					
+					localStorage.setItem('trainmyai_openai_key', key);
+					get_element('newkey').value='';
+					
+					tunings=response.data;
+					update_page();
+					auto_stage();
+				
+				} else {
+					report_api_error(response);
+					get_element('newkey').value='';
+					get_element('newkey').focus();
+				}
+			}
+			
+			function remove_key()
+			{
+				if (confirm('Are you sure you want to remove your key? Access to your OpenAI account will be lost.')) {
+					localStorage.setItem('trainmyai_openai_key', '');
+					tunings=[];
+					update_page();
+				}
+			}
+			
+		
+		//	Panel 2: Enter data
+			
+			function show_example(show)
+			{
+				set_display('example', show ? 'table' : 'none');
+				set_display('showexample', show ? 'none' : 'inline');
+				set_display('hideexample', show ? 'inline' : 'none');
+			}
+			
+			function review_data()
+			{
+				var data=read_training_data();
+				var tbody=get_element('reviewrows');
+				
+				tbody.innerHTML='';
+				reviewtokens=0;
+				
+				for (var i=0; i<data.length; i++) {
+					var prompt=data[i].prompt;
+					var completion=data[i].completion;
+					
+					var row=tbody.insertRow(-1);
+					
+					var cell=row.insertCell(-1); // num
+					cell.innerText=1+i;
+					cell.className='num';
+					
+					var cell=row.insertCell(-1); // prompt
+					cell.innerText=prompt;
+					
+					var cell=row.insertCell(-1); // completion
+					cell.innerText=completion;
+				
+					reviewtokens+=estimate_tokens(prompt)+estimate_tokens(completion);
+				}
+				
+				set_display('trainraw', 'none');
+				set_display('review', 'block');
+				set_display('prereview', 'none');
+				set_display('postreview', 'inline');
+				set_display('choosebase', 'list-item');
+				set_display('starttrain', 'list-item');
+				
+				estimate_training();
+			}
+			
+			function estimate_training()
+			{
+				var basemodel=model_base_recursive(get_element('basemodel').value);
+				var cost=training_cost[basemodel]*(reviewtokens/1000)*training_epochs;
+				get_element('traincostval').innerText=format_cost(cost);
+			}
+			
+			function change_data()
+			{
+				set_display('review', 'none');
+				set_display('prereview', 'inline');
+				set_display('postreview', 'none');
+				set_display('choosebase', 'none');
+				set_display('starttrain', 'none');
+				
+				set_display('trainraw', 'inline');
+				get_element('trainraw').select();
+				get_element('trainraw').focus();
+			}
+			
+			async function start_training()
+			{
+			//	Get and check model name
+			
+				var modelname=get_element('modelname').value.trim();
+				var basemodel=get_element('basemodel').value;
+				
+				if (!modelname.length) {
+					report_error('Please enter a model name');
+					return;
+				}
+				
+				for (var i=tunings.length-1; i>=0; i--) {
+					var tuning=tunings[i];
+					
+					if (modelname==extract_name(tuning.training_files[0].filename)) {
+						report_error('A model with this name already exists - please enter a different name');
+						return;
+					}
+				}
+				
+			//	Convert the training data into JSONL format
+			
+				var data=read_training_data();
+				var jsonl='';
+				
+				for (var i=0; i<data.length; i++)
+					jsonl+=JSON.stringify({
+						'prompt': data[i].prompt+prompt_end,
+						'completion': ' '+data[i].completion+completion_end
+					})+'\n';
+					
+			//	Upload it as a file
+				
+				var filename='data_'+modelname+'_'+random_digits(9)+'.jsonl'; // embed model name for later display
+				
+				var form=new FormData();
+				form.append('purpose', 'fine-tune');
+				form.append('file', new Blob([jsonl]), filename);
+				
+				set_status('Uploading data...');
+				
+				var response=await (await fetch('https://api.openai.com/v1/files', {
+					method: 'POST',
+					headers: {
+						'Authorization': api_authorization()
+					},
+					body: form
+				})).json();
+				
+				clear_status();
+				
+				if (response.status!='uploaded') {
+					report_api_error(response);
+					return;
+				}
+				
+				var fileid=response.id;
+				
+			//	Start the fine tuning
+				
+				set_status('Starting training...');
+				
+				var response=await (await fetch('https://api.openai.com/v1/fine-tunes', {
+					method: 'POST',
+					headers: {
+						'Authorization': api_authorization(),
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify({
+						'training_file': fileid,
+						'n_epochs': training_epochs,
+						'model': basemodel,
+						'suffix': '_'+modelname+'_'
+					})
+				})).json();
+				
+				clear_status();
+				
+				if (!response.id) {
+					report_api_error(response);
+					return;
+				}
+				
+			//	Switch to check status
+				
+				get_tunings();
+				set_stage(3);
+			}
+			
+			function read_training_data()
+			{
+				// we can't use simple split('\n') and split('\t') logic here because of multi-line cells
+				
+				var data=[];
+				
+				var text=get_element('trainraw').value.trim()+'\n'; // ensure ends in one newline
+				var len=text.length;
+				var pos=0;
+				
+				while (pos<len) {
+					var success=false;
+					
+					var endlinepos=text.indexOf('\n', pos); // for error reporting only
+					if (endlinepos<0)
+						endlinepos=len;
+					
+					var read=read_training_field(text, pos, '\t');
+					
+					if (read && read.clean.length) {
+						var prompt=read.clean;
+						pos+=read.raw.length;
+						
+						var read=read_training_field(text, pos, '\n');
+					
+						if (read && read.clean.length) {
+							var completion=read.clean;
+							pos+=read.raw.length;
+						}
+						
+						success=true;
+					}
+					
+					if (!success) {
+						report_error('Missing data in this line: '+text.substring(pos, endlinepos));
+						break;
+					}
+					
+					data[data.length]={'prompt':prompt, 'completion':completion};
+				}
+				
+				return data;
+			}
+			
+			function read_training_field(text, pos, delimiter)
+			{
+			
+			/*
+				In a table pasted from Excel or Google Sheets, cells containing multiple lines start with a quote mark (")
+				and end with another quote mark. Any quotes within the text are converted into two quote marks ("").
+				
+				So far so good.
+				
+				But a single line cell that starts with a quote mark looks exactly the same as a multi line cell and will be misread.
+				There is no easy fix for this, since pasted tab-delimited content is inherently ambiguous (there are more edge cases).
+				It seems that Excel does better when saving as tab-delimited text, so file upload is a potential future workaround.
+			*/
+				
+				if (text.charAt(pos)=='"') {
+					var endpos=text.indexOf('"'+delimiter, pos+1);
+					
+					if (endpos>=0)
+						return {
+							'raw': text.substring(pos, endpos+2),
+							'clean': text.substring(pos+1, endpos).trim().replaceAll('""', '"')
+						}
+					
+				} else {
+					var endpos=text.indexOf(delimiter, pos);
+				
+					if (endpos>=0)
+						return {
+							'raw': text.substring(pos, endpos+1),
+							'clean': text.substring(pos, endpos).trim()
+						};
+				}
+				
+				return null; // if we failed to find the end delimiter
+			}
+			
+		
+		//	Panel 3: Check status
+		
+			async function debug_tuning(index)
+			{
+				var tuning=tunings[index];
+				
+				set_status('Getting last event...');
+				
+				var response=await (await fetch('https://api.openai.com/v1/fine-tunes/'+tuning.id, {
+					headers: {
+						'Authorization': api_authorization()
+					}
+				})).json();
+				
+				clear_status();
+				
+				var event=response.events.slice(-1)[0];
+				var message='';
+				var suffix='';
+				var others='';
+				
+				for (var field in event) {
+					var value=event[field];
+					
+					if (field=='message')
+						message=value+'\n\n';
+					else if (field=='created_at') {
+						var date=new Date(value*1000); // timestamp in microseconds
+						suffix=' at '+date.toDateString()+' '+date.toLocaleTimeString();
+					} else
+						others+=title_case(field)+': '+value+'\n';
+				}
+				
+				report_success('Last event'+suffix+':\n\n'+message+others);
+			}
+		
+		
+		//	Panel 4: Use model
+			
+			function estimate_query()
+			{
+				var basemodel=model_base_recursive(get_element('models').value);
+				var prompt=get_element('prompt').value.trim();
+				var maxtokens=Number(get_element('respondlen').value)*1000/750;
+				
+				if (query_cost[basemodel]) {
+					var tokens=estimate_tokens(prompt)+maxtokens;
+					var cost=query_cost[basemodel]*(tokens/1000);
+					
+					get_element('querycostval').innerText=format_cost(cost);
+					set_display('querycost', 'inline');
+					
+				} else // in case the API response format changes
+					set_display('querycost', 'none');
+			}
+			
+			async function get_response()
+			{
+				var model=get_element('models').value;
+				var prompt=get_element('prompt').value.trim();
+				var maxtokens=Math.ceil(Number(get_element('respondlen').value)*1000/750);
+				
+				set_status('Processing request...');
+				
+				var response=await (await fetch('https://api.openai.com/v1/completions', {
+					method: 'POST',
+					headers: {
+						'Authorization': api_authorization(),
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify({
+						'model': model,
+						'prompt': prompt+prompt_end,
+						'temperature': 0, // deterministic MAP for now
+						'stop': completion_end,
+						'max_tokens': maxtokens
+					})
+				})).json();
+				
+				clear_status();
+				
+				if (!response.choices) {
+					report_api_error(response);
+					return;
+				}
+				
+				var text=response.choices[0].text.trim();
+
+				var endcheck=text.indexOf(completion_end); // extra check for this artifact in output
+				if (endcheck>0)
+					text=text.substring(0, endcheck);
+
+				get_element('completion').value=text;
+			}
+			
+			
+		//	Page utility functions
+			
+			function set_status(status)
+			{
+				get_element('status').innerText=status;
+				set_display('statusdiv', 'flex');
+			}
+			
+			function clear_status()
+			{
+				set_display('statusdiv', 'none');
+				get_element('status').innerText='';
+			}
+			
+			function report_success(message)
+			{
+				alert(message);
+			}
+			
+			function report_error(error)
+			{
+				alert('Error: '+error);
+			}
+			
+			function title_case(text)
+			{
+				return text.charAt(0).toUpperCase()+text.slice(1);
+			}
+			
+			function format_cost(cost)
+			{
+				return '$'+(Math.ceil(cost*100)/100).toFixed(2);
+			}
+			
+			function get_element(id)
+			{
+				return document.getElementById(id);
+			}
+			
+			function set_display(id, display)
+			{
+				get_element(id).style.display=display;
+			}
+			
+			
+		//	API utility functions
+			
+			function api_authorization()
+			{
+				return 'Bearer '+localStorage.getItem('trainmyai_openai_key');
+			}
+			
+			function estimate_tokens(string)
+			{
+				// According to https://openai.com/api/pricing/, 1000 tokens is about 750 words
+				
+				return 1+(string.split(/\b\W+\b/).length*1000/750); // add 1 for terminator token
+			}
+			
+			function random_digits(digits)
+			{
+				var tens=Math.pow(10, digits-1); // works up to 16
+				
+				return Math.floor(tens+Math.random()*9*tens);
+			}
+			
+			function extract_name(string, ifnone)
+			{
+				// extract names surrounded by underscores (_) as embedded in data file names
+				
+				var first=string.indexOf('_');
+				var last=string.lastIndexOf('_');
+				
+				if (last>first)
+					return string.substring(first+1, last);
+				else
+					return ifnone;
+			}
+			
+			function model_base_recursive(model)
+			{
+				while (modelbases[model])
+					model=modelbases[model];
+					
+				return model;
+			}
+			
+			function report_api_error(response)
+			{
+				alert('Error from OpenAI: '+response.error.code+'\n'+response.error.message);
+			}
+		
+		</script>
+
+	</head>
+	<body onload="load_page();">
+		<div id="statusdiv">
+			<span id="status">
+			</span>
+		</div>
+		<div id="container">
+			<header>
+				<div>
+					<h1><a href="../">TrainMyAI</a></h1>
+					<div class="toolname">Fine Tuner</div>
+				</div>
+				<ol id="stages">
+					<li id="link1"><a href="#" onclick="set_stage(1);">1. Enter key</a></li>
+					<li id="link2"><a href="#" onclick="set_stage(2);">2. Enter data</a></li>
+					<li id="link3"><a href="#" onclick="get_tunings(); set_stage(3);">3. Check status</a></li>
+					<li id="link4"><a href="#" onclick="set_stage(4);">4. Use model</a></li>
+				</ol>
+			</header>
+			<main>
+				<div id="content1">
+					<p class="banner">
+						Enter your key to get started
+					</p>
+					<p class="haskey warning">
+						All models are stored in your OpenAI account. If you remove <br>
+						the API key, your existing models will become unavailable.
+					</p>
+					<p class="haskey">
+						Key:
+						<input id="oldkey" type="password" size="30">
+						<input type="submit" value="Remove Key" onclick="remove_key();">
+					</p>
+					<div class="nokey">
+						<div class="steps">
+							Welcome to the TrainMyAI Fine Tuner. This creates a <a href="https://beta.openai.com/docs/guides/fine-tuning" target="openai">fine-tuned</a> <br>
+							GPT-3 model from a training set of prompts and responses, then <br>
+							lets you query the model. To get started:
+							<ol>
+								<li>
+									<a href="https://beta.openai.com/signup" target="openai">Sign up</a> for the OpenAPI beta or
+									<a href="https://beta.openai.com/login/" target="openai">log in</a> if you have an account. <br>
+									<span class="fineprint">When signing up, OpenAI gives you $18 in free credits which last for 3 months.</span>
+								</li>
+								<li>
+									Go to the <a href="https://beta.openai.com/account/api-keys" target="openai">API keys</a> page in your OpenAI account.
+								</li>
+								<li>
+									Click the button to create a new key and <b>do not click OK yet.</b> <br>
+									<span class="fineprint">(If you clicked OK by mistake, just click to create another new key.)</span>
+								</li>
+								<li>
+									Click the icon next to the key to copy it and then paste it here: <br>
+									<input id="newkey" type="password" value="" size="30">
+									<span class="fineprint"><br>
+									Your key is only seen by your own web browser &ndash; please see notes below.</span>
+								</li>
+								<li>
+									Click to <input type="submit" value="Verify Key" onclick="verify_key();">
+								</li>
+							</ol>
+						</div>
+					</div>
+					<p class="fineprint">
+						This is a one-page web application that runs locally in your web browser. <br>
+						<span class="hidelocal">
+							Our server delivers the page but never sees your key, data or queries. <br>
+							If you prefer, you can <a href="../download.php?fine-tuner">download this page</a> and open it on your own computer.
+						</span>
+						<span class="showlocal">
+							It was downloaded from <a href="https://trainmy.ai/">TrainMyAI</a> and may not be the latest version.
+						</span>
+					</p>
+				</div>
+				<div id="content2">
+					<p class="banner">
+						Create a fine-tuned model from training data
+					</p>
+					<p class="nokey warning">
+						Before creating a model, please enter a key.
+					</p>
+					<div class="steps">
+						To create a new model, please follow these steps:
+						<ol>
+							<li id="trainhelp">
+								Enter the training data into a spreadsheet such as Microsoft Excel or Google Sheets. <br>
+								Each row should contain one example prompt and its response.
+								<a href="#" onclick="show_example(true);" id="showexample">Show example</a>
+								<a href="#" onclick="show_example(false);" id="hideexample">Hide example</a>
+								<br>
+								<table id="example">
+									<tr>
+										<td>
+											What is your returns policy?
+										</td>
+										<td>
+											We allow returns within 30 days of purchase.
+										</td>
+									</tr>
+									<tr>
+										<td>
+											Where are you based?
+										</td>
+										<td>
+											Our office is located in Central Street, London.
+										</td>
+									</tr>
+									<tr>
+										<td>
+											What languages do you speak?
+										</td>
+										<td>
+											We speak English, French and Spanish.
+										</td>
+									</tr>
+								</table>
+								<span class="fineprint">
+									You can also use the <a href="../qa-generator/">Q&amp;A generator</a> to generate prompts and responses from regular text. <br>
+								</span>
+							</li>
+							<li>
+								Copy the table of data and paste it here: <br>
+								<textarea id="trainraw"></textarea>
+								<span class="fineprint">
+									For good results, a few hundred examples are required.
+								</span>
+							</li>
+							<li>
+								<span id="prereview">Click to <input type="submit" value="Review Data" onclick="review_data();"> before starting training. <br></span>
+								<span id="postreview">Review your data below: <br></span>
+								<table id="review">
+									<thead>
+										<tr>
+											<th class="num">
+												#
+											</th>
+											<th>
+												Prompt
+											</th>
+											<th>
+												Response
+											</th>
+										</tr>
+									</thead>
+									<tbody id="reviewrows">
+									</tbody>
+								</table>
+							</li>
+							<li>
+								Choose a name for your model:
+								<input id="modelname" placeholder="My Model" size="30">
+							</li>
+							<li id="choosebase">
+								Choose the base model:
+								<select id="basemodel" onchange="estimate_training();">
+									<option value="davinci">Davinci - highest quality</option>
+									<option value="curie">Curie</option>
+									<option value="babbage">Babbage</option>
+									<option value="ada">Ada - lowest cost</option>
+								</select>
+								<span id="traincost">
+									(estimated training cost <span id="traincostval"></span> &ndash; <a href="https://beta.openai.com/account/usage" target="openai">check balance</a>)
+								</span>
+							</li>
+							<li id="starttrain">
+								Click to <input id="editbutton" type="submit" value="Change Data" onclick="change_data();">
+								or <input disabled id="trainbutton" type="submit" value="Start Training" onclick="start_training();">
+							</li>
+						</ol>
+					</div>
+					<div id="modelstatus">
+					</div>
+				</div>
+				<div id="content3">
+					<p class="banner">
+						Check the training status of your models
+					</p>
+					<p class="nokey warning">
+						In order to check your models, please enter a key.
+					</p>
+					<p class="haskey">
+						It takes at least a few minutes to train a custom AI model. <br>
+						It could take longer if OpenAI is busy or the training data is large.
+					</p>
+					<p class="haskey">
+						Click to <input disabled id="refreshbutton" type="submit" value="Refresh" onclick="get_tunings();"> the list of models.
+					</p>
+					<table id="tunings">
+						<thead>
+							<tr>
+								<th>
+									Date
+								</th>
+								<th>
+									Time
+								</th>
+								<th>
+									Model Name
+								</th>
+								<th>
+									Base Model
+								</th>
+								<th>
+									Status
+								</th>
+							</tr>
+						</thead>
+						<tbody id="tuningsrows">
+						</tbody>
+					</table>
+				</div>
+				<div id="content4">
+					<p class="banner">
+						Use a model to create responses
+					</p>
+					<p class="nokey warning">
+						In order to use a model, please enter a key.
+					</p>
+					<table id="query">
+						<tr>
+							<th>
+								Model:
+							</th>
+							<td>
+								<select id="models" onchange="estimate_query();"></select>
+							</td>
+						</tr>
+						<tr>
+							<th>
+								Prompt:
+							</th>
+							<td>
+								<textarea id="prompt" oninput="estimate_query();"></textarea>
+							</td>
+						</tr>
+						<tr>
+							<th>
+								Response limit:
+							</th>
+							<td>
+								<select id="respondlen" onchange="estimate_query();">
+									<option value="10">Approx 10 words</option>
+									<option value="20">Approx 20 words</option>
+									<option value="50">Approx 50 words</option>
+									<option value="100" selected>Approx 100 words</option>
+									<option value="200">Approx 200 words</option>
+									<option value="500">Approx 500 words</option>
+									<option value="1000">Approx 1000 words</option>
+								</select>
+								<input id="respondbutton" type="submit" value="Get Response" onclick="get_response();">
+								<span id="querycost">
+									(estimated cost <span id="querycostval"></span> &ndash; <a href="https://beta.openai.com/account/usage" target="openai">check balance</a>)
+								</span>
+							</td>
+						</tr>
+						<tr>
+							<th>
+								Response:
+							</th>
+							<td>
+								<textarea id="completion"></textarea>
+							</td>
+						</tr>
+					</table>
+				</div>
+			</main>
+			<footer>
+				<div id="footerleft">
+					Subject to <a href="https://openai.com/api/policies/terms/" target="openai">OpenAI Terms of Use</a>.
+				</div>
+				<div id="footerright">
+					<a href="https://trainmy.ai/">TrainMyAI</a> Fine Tuner &copy; Gideon Greenspan &ndash; <a href="http://www.gidgreen.com/contact.php">Send Feedback</a>
+				</div>
+			</footer>
+		</div>
+	</body>
+</html>

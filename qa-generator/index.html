@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<!--
+	TrainMyAI copyright (c) Gideon Greenspan 2023
+	License: GPLv3 + visible attribution
+	
+	This program is free software: you can redistribute it and/or modify it under the terms
+	of the GNU General Public License v3 as published by the Free Software Foundation. However,
+	all modified copies must contain a link back to the trainmy.ai website, shown at all times.
+	
+	This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+	without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+	
+	With thanks to the OpenAI team for creating GPT-3, giving it a clean API for fine tuning,
+	and enabling client-side API calls from the browser (cross-origin resource sharing).
+-->
+<html lang="en">
+
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>TrainMyAI Q&amp;A Generator - Generate questions and answers using GPT-3</title>
+		
+		<style>
+			/* These two CSS styles are switched in the downloaded version. The pages are otherwise identical. */
+			.hidelocal {}
+			.showlocal {display:none;}
+			
+			header {display:flex; align-items:center; justify-content:space-between; padding:0.5em;}
+			body {font-family:trebuchet ms,sans-serif; font-size:18px; margin:0;}
+			a, a:visited {color:#009;}
+			#container {display:flex; flex-direction:column; min-height: 100vh;}
+			textarea {box-sizing:border-box;}
+			
+			h1 {font-family:georgia,serif; font-size:64px; font-weight:normal; text-shadow: #aaa 3px 3px 4px; margin:0 8px;}
+			h1 a, h1 a:visited {text-decoration:none; color:black;}
+			.toolname {font-family:georgia,serif; font-size:22px; text-align:center; text-shadow: #aaa 1px 1px 2px; margin-top:4px;}
+			#stages {text-align:right; margin:0;}
+			#stages li {display:inline-block; width:8em; text-align:center; margin:8px; padding-bottom:4px; border-bottom:8px solid #ccf;}
+			#stages a {color:#009; text-decoration:none;}
+			#stages li.selected {border-color:#66c;}
+			
+			#statusdiv {display:none; position:fixed; width:100%; height:100%; align-items:center; justify-content:center;}
+			#status {padding:0.5em; background:#fcc;}
+			
+			main {flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:1em;}
+			main > div {display:none;}
+			main > div.selected {display:table-cell; text-align:center;}
+			footer {font-size:80%; margin-top:2em; display:flex; align-items:flex-end; gap:1em; padding:0.5em;}
+			#footerleft {flex:1; text-align:left;}
+			#footerright {flex:1; text-align:right;}
+			
+			.banner {font-size:200%;}
+			.steps {display:inline-block; text-align:left;}
+			.steps li {line-height:150%; margin-bottom:0.5em;}
+			.fineprint {font-size:80%;}
+			.warning {color:#c00; margin:1em 0;}
+			
+			#textraw, #review {width:800px; max-width:90vw; margin:0.5em 0;}
+			#textraw {height:16em; padding:0.5em;}
+			#postreview {display:none;}
+			
+			#review {border:1px solid #ccc; border-collapse:collapse; padding:0 1px; max-height:20em; display:none; overflow-y:auto;}
+			#review td {border-bottom:1px solid #ccc; padding:0.25em 0.5em; font-size:75%; line-height:100%;}
+
+			#choosestart {display:none;}
+			#countsets, #countqs {width:2em;}
+
+			#progress {display:none;}
+			#finished {display:none;}
+			
+			#output {width:800px; max-width:90vw; border-collapse:collapse;}
+			#output .question, #output .answer {padding:0.5em; border:1px solid #ccc; font-size:80%; text-align:left;}
+			#output .question {width:40%;}
+			#output .answer {width:60%;}
+			#output .setseparator {padding:1px; background-color:#ccc;}
+			#output .paraseparator {padding:0.5em;}
+			
+			/*
+			#output .source {font-size:80%; width:25%; vertical-align:middle; text-align:left;}
+			#output .gendate {font-size:80%; width:5%; vertical-align:middle; text-align:center;}
+			*/
+			
+			@media (max-width: 800px) {
+				h1 {font-size:48px;}
+			}
+				
+			@media (max-width: 640px) {
+				#stages {font-size:80%;}
+				#stages li {margin-top:4px; margin-bottom:4px;}
+			}
+		</style>
+		
+		<script>
+		
+		//	Some constants you might want to change
+		
+			const min_para_words=5; // ignore paragraphs shorter than this
+			const openai_model='text-davinci-003';
+			const max_tokens_per_qa=120; // maximum unlikely to be reached
+			const query_cost=0.02; // $ per 1000 tokens for language models (based on https://openai.com/api/pricing/ in Jan 2023)
+			const other_temp=0.9; // temperature to use for anything other than the first completion
+			const min_request_delay=1000; // minimum milliseconds between requests
+		
+		//	Global variables
+			
+			var haskey=false;
+			var interval=null;
+			var models=[];
+			var paragraphs=[];
+			var countqs=null;
+			var countsets=null;
+			var paraindex=0;
+			var setindex=0;
+			var inrequest=false;
+			var lastrequesttime=0;
+			var requestdelay=0;
+		
+
+		//	Page initialization
+							
+			async function load_page()
+			{
+				update_page();
+				await get_models();
+				auto_stage();
+			}
+			
+			function auto_stage()
+			{
+				var stage=1;
+				
+				if (haskey) {
+					if (interval)
+						stage=3;
+					else
+						stage=2;
+				}
+				
+				set_stage(stage);
+			}
+			
+			function set_stage(stage)
+			{
+				for (var s=1; s<=3; s++) {
+					get_element('link'+s).className=(s==stage) ? 'selected' : '';
+					get_element('content'+s).className=(s==stage) ? 'selected' : '';
+				}
+			}
+			
+			async function get_models()
+			{
+				if (haskey) {
+					set_status('Checking key...');
+				
+					var response=await (await fetch('https://api.openai.com/v1/models', {
+						headers: {
+							'Authorization': api_authorization()
+						}
+					})).json();
+				
+					clear_status();
+				
+					if (response.data) {
+						models=response.data;
+						update_page();
+						
+					} else
+						report_api_error(response);
+				}
+			}
+			
+			function update_page()
+			{
+				apikey=localStorage.getItem('trainmyai_openai_key');
+				haskey=apikey ? true : false;
+				
+				if (haskey)
+					get_element('oldkey').value=apikey;
+					
+				var elements=document.getElementsByClassName('haskey');
+				for (var i=0; i<elements.length; i++)
+					elements[i].style.display=haskey ? 'block' : 'none';
+				
+				var elements=document.getElementsByClassName('nokey');
+				for (var i=0; i<elements.length; i++)
+					elements[i].style.display=haskey ? 'none' : 'block';
+					
+				if (interval) {
+					set_display('progress', 'block');
+					get_element('settotal').innerText=countsets;
+					get_element('paratotal').innerText=paragraphs.length;
+					
+				} else {
+					set_display('progress', 'none');
+				}
+			}
+			
+			
+		//	Panel 1: Enter key
+			
+			async function verify_key()
+			{
+				var key=get_element('newkey').value.trim();
+				
+				if (key.length<8) {
+					report_error('Please enter the full key');
+					return;
+				}
+				
+				set_status('Verifying key...');
+				
+				var response=await (await fetch('https://api.openai.com/v1/models', {
+					headers: {
+						'Authorization': 'Bearer '+key
+					}
+				})).json();
+				
+				clear_status();
+				
+				if (response.data) {
+					report_success('Thank you. Your key has been verified and stored locally in your browser.');
+					
+					localStorage.setItem('trainmyai_openai_key', key);
+					get_element('newkey').value='';
+					
+					models=response.data;
+					update_page();
+					auto_stage();
+				
+				} else {
+					report_api_error(response);
+					get_element('newkey').value='';
+					get_element('newkey').focus();
+				}
+			}
+			
+			function remove_key()
+			{
+				if (confirm('Are you sure you want to remove your key? Access to your OpenAI account will be lost.')) {
+					localStorage.setItem('trainmyai_openai_key', '');
+					models=[];
+					update_page();
+				}
+			}
+			
+		
+		//	Panel 2: Enter text
+			
+			function review_paragraphs()
+			{
+				get_paragraphs();
+				
+				var tbody=get_element('reviewrows');
+				tbody.innerHTML='';
+				
+				for (var i=0; i<paragraphs.length; i++) {
+					var row=tbody.insertRow(-1);				
+					var cell=row.insertCell(-1);
+					cell.innerText=paragraphs[i];
+				}
+				
+				read_counts();
+				estimate_cost();
+
+				set_display('source', 'none');
+				set_display('review', 'block');
+				set_display('prereview', 'none');
+				set_display('postreview', 'inline');
+				set_display('choosestart', 'block');
+			}
+			
+			function get_paragraphs()
+			{
+				paragraphs=[];
+				
+				if (get_element('reqblank').value=='1')
+					var rawparas=get_element('textraw').value.split(/\n\s*\n/);
+				else
+					var rawparas=get_element('textraw').value.split('\n');
+				
+				for (var i=0; i<rawparas.length; i++) {
+					var rawpara=rawparas[i].trim().replaceAll('\n', ' ');
+					
+					if (rawpara.charAt(rawpara.length-1)!='?')
+						if (rawpara.split(/\s+/).length>=min_para_words)
+							paragraphs.push(rawpara);
+				}
+			}
+			
+			function read_counts()
+			{
+				countsets=parseInt(get_element('countsets').value) || 1;
+				countqs=parseInt(get_element('countqs').value) || 1;
+			}
+			
+			function update_counts()
+			{
+				read_counts();
+				estimate_cost();
+			}
+			
+			function estimate_cost()
+			{
+				var tokens=0;
+				var stored=0;
+				
+				for (var i=0; i<paragraphs.length; i++) {
+					var paragraph=paragraphs[i];
+					var settokens=estimate_tokens(create_prompt(paragraph, countqs)) + // prompt
+						countqs*50 // around 30 words per Q&A pair, i.e. 40 tokens, plus Q/A numbers, other padding
+						
+					for (var tryset=0; tryset<countsets; tryset++)
+						if (localStorage.getItem(para_storage_key(paragraph, countqs, tryset)))
+							stored++;
+						else
+							tokens+=settokens;
+				}
+				
+				if (stored) {
+					set_display('hasstored', 'inline');
+					set_display('nonestored', 'none');
+					get_element('storedpercent').innerText=Math.ceil(stored/(paragraphs.length*countsets)*100);
+				
+				} else {
+					set_display('hasstored', 'none');
+					set_display('nonestored', 'inline');
+				}
+				
+				var cost=query_cost*tokens/1000;
+				get_element('costval').innerText=format_cost(cost);
+			}
+			
+			function change_text()
+			{
+				set_display('review', 'none');
+				set_display('prereview', 'inline');
+				set_display('postreview', 'none');
+				set_display('choosestart', 'none');
+				
+				set_display('source', 'block');
+				get_element('textraw').select();
+				get_element('textraw').focus();
+			}
+			
+			function start_generating()
+			{
+				clear_output();
+
+				read_counts();
+				paraindex=0;
+				setindex=0;
+				update_progress();				
+				
+				adjust_delay(0);
+				interval=setInterval(interval_timer, 10);
+				
+				update_page();
+				set_stage(3);
+			}
+			
+			function stop_generating()
+			{
+				if (interval) {
+					clearInterval(interval);
+					interval=null;
+				}
+				
+				update_page();
+				
+				if (get_element('output').rows.length)
+					set_display('finished', 'block');
+			}
+			
+		
+		//	Panel 3: View output
+		
+			function clear_output()
+			{
+				var tbody=get_element('outputrows');
+				tbody.innerHTML='';
+				set_display('finished', 'none');
+			}
+			
+			function add_to_output(paragraph, result, lastofset)
+			{
+				var countrows=result.pairs.length;
+				
+				var tbody=get_element('outputrows');
+				
+				for (var j=0; j<countrows; j++) {
+					var row=tbody.insertRow(-1);
+					
+					var cell=row.insertCell(-1);
+					cell.className='question';
+					cell.innerText=result.pairs[j].question;
+
+					var cell=row.insertCell(-1);
+					cell.className='answer';
+					cell.innerText=result.pairs[j].answer;
+					
+					/*
+					if (j==0) { // one row with colspan for source and gendate
+						var cell=row.insertCell(-1);
+						cell.className='source';
+						cell.rowSpan=countrows;
+						cell.innerText=paragraph;
+
+						var cell=row.insertCell(-1);
+						cell.className='gendate';
+						cell.rowSpan=countrows;
+						var date=new Date(result.time);
+						cell.innerText=date.toDateString()+' '+date.toLocaleTimeString();
+					}
+					*/
+				}
+				
+				var row=tbody.insertRow(-1);
+				var cell=row.insertCell(-1);
+				cell.className=lastofset ? 'paraseparator' : 'setseparator';
+				cell.colSpan=2;
+			}
+			
+			function output_to_fine_tuner()
+			{
+				localStorage.setItem('trainmyai_trainraw_set', get_element('output').innerText); // innerText gives good tab-delimited text
+				window.open('../fine-tuner/', '_blank');
+			}
+			
+
+		//	Generating process
+		
+			function interval_timer()
+			{
+				if (inrequest) // already in another request
+					return;
+					
+				if (paraindex>=paragraphs.length) { // finished the list
+					stop_generating();
+					return;
+				}
+				
+				inrequest=true; // poor man's mutex starts here
+
+				var paragraph=paragraphs[paraindex];			
+				var rawresult=localStorage.getItem(para_storage_key(paragraph, countqs, setindex));
+				
+				if (rawresult) {
+					add_to_output(paragraph, JSON.parse(rawresult), (setindex==(countsets-1)));
+					increment_set_para();
+					inrequest=false;
+				
+				} else {
+					var time=new Date().getTime();
+					
+					if ( (time-lastrequesttime)<requestdelay ) {
+						inrequest=false; // try again soon
+						
+					} else {
+						lastrequesttime=time;
+					
+						fetch('https://api.openai.com/v1/completions', {
+							method: 'POST',
+							headers: {
+								'Authorization': api_authorization(),
+								'Content-Type': 'application/json'
+							},
+							body: JSON.stringify({
+								'model' : openai_model,
+								'prompt' : create_prompt(paragraph, countqs),
+								'max_tokens' : max_tokens_per_qa*countqs,
+								'temperature' : (setindex ? other_temp : 0), // first at 0 temperature, rest are random
+							})
+						}).then(
+							(response) => response.json()
+						).catch(error => {
+							; // silent error, just use exponential backoff
+						}).then(
+							(data) => {
+								if (data && data.choices) {
+									var text=data.choices[0].text;
+									var result=extract_result(text, countqs, time);
+
+									localStorage.setItem(para_storage_key(paragraph, countqs, setindex), JSON.stringify(result));
+									add_to_output(paragraph, result, (setindex==(countsets-1)));
+
+									adjust_delay(0.75);
+									increment_set_para();
+							
+								} else
+									adjust_delay(2); // exponential backoff
+
+								inrequest=false;
+							}
+						);
+					}
+				}
+			}
+			
+			function create_prompt(paragraph, countqs)
+			{
+				return 'Generate '+countqs+' pairs of questions and answers which cover all the information in the text below, '+
+					'and which a person would naturally ask, where each line has a numbered prefix of Q or A.\n\n'+paragraph;
+			}
+			
+			function extract_result(text, countqs, time)
+			{
+				var lines=text.split('\n');
+				var questions=[];
+				var answers=[];
+				
+				for (var i=0; i<lines.length; i++) {
+					var line=lines[i];
+					var match=line.match(/([QA])([0-9]+)\:(.*)/);
+					
+					if (match) {
+						var index=parseInt(match[2]);
+	
+						if (index<=countqs) { // sanity check
+							if (match[1]=='Q')
+								questions[index]=match[3].trim();
+							else if (match[1]=='A')
+								answers[index]=match[3].trim();
+						}
+					}
+				}
+				
+				var maxindex=Math.max(questions.length, answers.length);
+				var result={'pairs': [], 'time': time};
+				
+				for (var index=0; index<maxindex; index++)
+					if (questions[index] && answers[index])
+						result['pairs'].push({'question' : questions[index], 'answer' : answers[index]});
+						
+				return result;
+			}
+			
+			function increment_set_para()
+			{
+				setindex++;
+				if (setindex>=countsets) {
+					paraindex++;
+					setindex=0;
+				}
+				
+				if (paraindex<paragraphs.length)
+					update_progress();
+			}
+			
+			function update_progress()
+			{
+				get_element('setnum').innerText=(1+setindex);
+				get_element('paranum').innerText=(1+paraindex);
+			}
+		
+			function adjust_delay(factor)
+			{
+				requestdelay=Math.max(min_request_delay, requestdelay*factor);
+				
+				if (requestdelay>min_request_delay)
+					get_element('delay').innerText='(delay now '+(requestdelay/1000)+' seconds)';
+				else
+					get_element('delay').innerText='';
+			}
+			
+		
+		//	Page utility functions
+			
+			function set_status(status)
+			{
+				get_element('status').innerText=status;
+				set_display('statusdiv', 'flex');
+			}
+			
+			function clear_status()
+			{
+				set_display('statusdiv', 'none');
+				get_element('status').innerText='';
+			}
+			
+			function report_success(message)
+			{
+				alert(message);
+			}
+			
+			function report_error(error)
+			{
+				alert('Error: '+error);
+			}
+			
+			function title_case(text)
+			{
+				return text.charAt(0).toUpperCase()+text.slice(1);
+			}
+			
+			function format_cost(cost)
+			{
+				return '$'+(Math.ceil(cost*100)/100).toFixed(2);
+			}
+			
+			function get_element(id)
+			{
+				return document.getElementById(id);
+			}
+			
+			function set_display(id, display)
+			{
+				get_element(id).style.display=display;
+			}
+			
+			function para_storage_key(paragraph, countqs, setindex)
+			{
+				return 'trainmyai_qagenerator_'+countqs+'_qs_set_'+(1+setindex)+': '+paragraph;
+			}
+			
+			
+		//	API utility functions
+			
+			function api_authorization()
+			{
+				return 'Bearer '+localStorage.getItem('trainmyai_openai_key');
+			}
+			
+			function estimate_tokens(string)
+			{
+				// According to https://openai.com/api/pricing/, 1000 tokens is about 750 words
+				
+				return 1+(string.split(/\b\W+\b/).length*1000/750); // add 1 for terminator token
+			}
+			
+			function report_api_error(response)
+			{
+				alert('Error from OpenAI: '+response.error.code+'\n'+response.error.message);
+			}
+		
+		</script>
+
+	</head>
+	<body onload="load_page();">
+		<div id="statusdiv">
+			<span id="status">
+			</span>
+		</div>
+		<div id="container">
+			<header>
+				<div>
+					<h1><a href="../">TrainMyAI</a></h1>
+					<div class="toolname">Q&amp;A Generator</div>
+				</div>
+				<ol id="stages">
+					<li id="link1"><a href="#" onclick="set_stage(1);">1. Enter key</a></li>
+					<li id="link2"><a href="#" onclick="set_stage(2);">2. Enter text</a></li>
+					<li id="link3"><a href="#" onclick="set_stage(3);">3. View Q&amp;As</a></li>
+				</ol>
+			</header>
+			<main>
+				<div id="content1">
+					<p class="banner">
+						Enter your key to started
+					</p>
+					<p class="haskey warning">
+						All queries are made with your OpenAI account. <br>
+						If you remove the API key, no more queries will be possible.
+					</p>
+					<p class="haskey">
+						Key:
+						<input id="oldkey" type="password" size="30">
+						<input type="submit" value="Remove Key" onclick="remove_key();">
+					</p>
+					<div class="nokey">
+						<div class="steps">
+							Welcome to the TrainMyAI Q&amp;A generator, which automatically generates <br>
+							a set of questions and answers from some text. To get started:
+							<ol>
+								<li>
+									<a href="https://beta.openai.com/signup" target="openai">Sign up</a> for the OpenAPI beta or
+									<a href="https://beta.openai.com/login/" target="openai">log in</a> if you have an account. <br>
+									<span class="fineprint">When signing up, OpenAI gives you $18 in free credits which last for 3 months.</span>
+								</li>
+								<li>
+									Go to the <a href="https://beta.openai.com/account/api-keys" target="openai">API keys</a> page in your OpenAI account.
+								</li>
+								<li>
+									Click the button to create a new key and <b>do not click OK yet.</b> <br>
+									<span class="fineprint">(If you clicked OK by mistake, just click to create another new key.)</span>
+								</li>
+								<li>
+									Click the icon next to the key to copy it and then paste it here: <br>
+									<input id="newkey" type="password" value="" size="30">
+									<span class="fineprint"><br>
+									Your key is only seen by your own web browser &ndash; please see notes below.</span>
+								</li>
+								<li>
+									Click to <input type="submit" value="Verify Key" onclick="verify_key();">
+								</li>
+							</ol>
+						</div>
+					</div>
+					<p class="fineprint">
+						This is a one-page web application that runs locally in your web browser. <br>
+						<span class="hidelocal">
+							Our server delivers the page but never sees your key, data or queries. <br>
+							If you prefer, you can <a href="../download.php?qa-generator">download this page</a> and open it on your own computer.
+						</span>
+						<span class="showlocal">
+							It was downloaded from <a href="https://trainmy.ai/">TrainMyAI</a> and may not be the latest version.
+						</span>
+					</p>
+				</div>
+				<div id="content2">
+					<p class="banner">
+						Enter text for generating questions and answers 
+					</p>
+					<p class="nokey warning">
+						Before you get started, please enter a key.
+					</p>
+					<div class="steps">
+						<ol>
+							<li>
+								Copy the source text and paste it below: <br>
+								<div id="source">
+									<textarea id="textraw"></textarea> <br>
+									Paragraphs are separated by
+									<select id="reqblank">
+										<option value="0">Single returns</option>
+										<option value="1">Blank lines</option>
+									</select>
+								</div>
+							</li>
+							<li>
+								<span id="prereview">
+									Click to <input type="submit" value="Review Paragraphs" onclick="review_paragraphs();"> before starting.
+									Short sentences and questions will be removed.
+								</span>
+								<span id="postreview">Review your paragraphs below: <br></span>
+								<table id="review">
+									<tbody id="reviewrows">
+									</tbody>
+								</table>
+							</li>
+							<div id="choosestart">
+								<li>
+									Generate 
+									<input id="countsets" value="3" oninput="update_counts();">
+									set(s) of up to 
+									<input id="countqs" value="5" oninput="update_counts();">
+									questions for each paragraph <br>
+									
+									<span class="fineprint">
+										<span id="hasstored">
+											<span id="storedpercent"></span>% of these sets are already stored, so the estimated cost is only
+										</span>
+										<span id="nonestored">
+											Estimated cost:
+										</span>
+										<span id="costval"></span> &ndash; <a href="https://beta.openai.com/account/usage" target="openai">check balance</a>
+									</span>
+								</li>
+								<li>
+									Click to <input id="editbutton" type="submit" value="Change Text" onclick="change_text();">
+									or <input id="startbutton" type="submit" value="Start Generating" onclick="start_generating();">
+								</li>
+							</div>
+						</ol>
+					</div>
+				</div>
+				<div id="content3">
+					<p class="banner">
+						View the questions and answers generated
+					</p>
+					<p id="progress">
+						Generating set <span id="setnum"></span> of <span id="settotal"></span>
+						for paragraph <span id="paranum"></span> of <span id="paratotal"></span>&#8230;
+						<input type="submit" value="Stop Generating" onclick="stop_generating();">
+						<span id="delay" class="fineprint"></span>
+					</p>
+					<p id="finished">
+						<input type="submit" value="Copy this output to the TrainMyAI Fine Tuner" onclick="output_to_fine_tuner();">
+					</p>
+					<table id="output">
+						<tbody id="outputrows">
+						</tbody>
+					</table>
+				</div>
+			</main>
+			<footer>
+				<div id="footerleft">
+					Subject to <a href="https://openai.com/api/policies/terms/" target="openai">OpenAI Terms of Use</a>.
+				</div>
+				<div id="footerright">
+					<a href="https://trainmy.ai/">TrainMyAI</a> Q&amp;A Generator &copy; Gideon Greenspan &ndash; <a href="http://www.gidgreen.com/contact.php">Send Feedback</a>
+				</div>
+			</footer>
+		</div>
+	</body>
+</html>
