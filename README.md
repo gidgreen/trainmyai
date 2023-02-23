@@ -5,7 +5,7 @@ TrainMyAI
 
 All of the tools run entirely within your web browser, so your key or data are never revealed to the server. The web pages can be downloaded and run from any location, including locally on your own computer.
 
-All of the source code is visible within the web pages, or forked from the [Github repository](https://github.com/gidgreen/trainmyai).
+All of the source code is visible within the web pages, and can be forked from the [Github repository](https://github.com/gidgreen/trainmyai).
 
 With thanks to the OpenAI team for creating GPT-3, giving it a clean API, and enabling client-side API calls from the browser.
 
