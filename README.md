@@ -14,6 +14,7 @@ License
 -------
 
 Copyright (c) Gideon Greenspan 2023
+
 License: GPLv3 + visible attribution
 
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License v3 as published by the Free Software Foundation. **However, all modified copies must contain a link back to the trainmy.ai website, shown at all times.**
