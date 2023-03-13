@@ -24,7 +24,7 @@
 			/* These two CSS styles are switched in the downloaded version. The pages are otherwise identical. */
 			.hidelocal {}
 			.showlocal {display:none;}
-			
+
 			header {display:flex; align-items:center; justify-content:space-between; padding:0.5em;}
 			body {font-family:trebuchet ms,sans-serif; font-size:18px; margin:0;}
 			a, a:visited {color:#009;}
@@ -42,7 +42,7 @@
 			#statusdiv {display:none; position:fixed; width:100%; height:100%; align-items:center; justify-content:center;}
 			#status {padding:0.5em; background:#fcc;}
 			
-			main {flex:1; display:flex; flex-direction:column; align-items:center; padding:1em;}
+			main {flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:1em;}
 			main > div {display:none;}
 			main > div.selected {display:table-cell; text-align:center;}
 			footer {font-size:80%; margin-top:2em; display:flex; align-items:flex-end; gap:1em; padding:0.5em;}
@@ -68,21 +68,16 @@
 			#base td {padding:0.5em; border:1px solid #ccc;}
 			#base .embedding, #base .date, #base .time, #base .buttons {text-align:center; white-space:nowrap;}
 			#baseheaders td {font-weight:bold;}
-			
-			#chattable {width:90vw; max-width:800px;}
-			#userefsval {width:2em;}
-			#usedrefs {display:none;}
-			#querycost {font-size:80%;}
-			#headerrow td {padding-bottom:1em;}
-			#refheader, #refrows {display:none;}
-			#refheader td {padding-top:2em;}
-			.questionrow td {padding-right:10%;}
-			.answerrow td {padding-left:10%;}
-			.question, .answer {width:100%; font-family:trebuchet ms,sans-serif; border:black 1px solid;}
-			.question:disabled, .answer:disabled {border:white 1px solid; color:black;}
-			#chattable .paragraph {padding:0.5em;}
-			#chattable .embedding {padding:0.5em; text-align:center; vertical-align:middle; white-space:nowrap;}
-			
+
+			#query th {text-align:right; padding:0.25em 0.5em; vertical-align:top;}
+			#query td {text-align:left; padding:0.25em 0.5em; vertical-align:top;}
+			#query .bars {text-align:center; vertical-align:middle;}
+			#query .paragraph {width:480px;}
+			#question {width:480px; height:4em;}
+			#useparas {width:2em;}
+			#answer {width:480px; height:10em;}
+			#querycost {font-size:80%; display:none;}
+
 			@media (max-width: 800px) {
 				h1 {font-size:48px;}
 			}
@@ -100,11 +95,9 @@
 			const min_para_words=5; // ignore paragraphs shorter than this
 			const embeds_storage_prefix='trainmyai_kb_embeds: '; // localStorage keys, concatenated with paragraph itself
 			const openai_embedding_model='text-embedding-ada-002'; // which model to use to get embeddings
-			const openai_query_model='gpt-3.5-turbo'; // which model to use for queries
+			const openai_query_model='text-davinci-003'; // which model to use for queries
 			const embedding_cost=0.0004; // $ per 1000 tokens for embedding requests (based on https://openai.com/api/pricing/ in Jan 2023)
-			const query_cost=0.002; // $ per 1000 tokens for querying (based on https://openai.com/api/pricing/ in Mar 2023)
-			const query_token_limit=4096; // maximum number of tokens for entire chat
-			const references_max_usage=0.75; // don't allow reference paragraphs to use more than this proportion of total token limit
+			const query_cost=0.02; // $ per 1000 tokens for querying (based on https://openai.com/api/pricing/ in Jan 2023)
 			const embedding_max_batch=50; // how many embeddings to retrieve at once
 			const min_request_delay=500; // minimum milliseconds between requests
 			const embedding_bars=32; // how many bars to show in embedding fingerprint diagrams
@@ -120,10 +113,8 @@
 			var inrequest=false;
 			var lastrequesttime=0;
 			var requestdelay=0;
-			var messages=[];
-			var usedtokens=0;
-			
-			
+		
+
 		//	Page initialization
 							
 			async function load_page()
@@ -131,7 +122,6 @@
 				update_page();
 				await get_models();
 				display_base();
-				add_chat_question();
 				auto_stage();
 			}
 			
@@ -157,9 +147,6 @@
 					get_element('link'+s).className=(s==stage) ? 'selected' : '';
 					get_element('content'+s).className=(s==stage) ? 'selected' : '';
 				}
-				
-				if (stage==4)
-					focus_chat_question();
 			}
 			
 			async function get_models()
@@ -208,9 +195,9 @@
 				} else {
 					set_display('progress', 'none');
 				}
-				
+
+				get_element('respondbutton').disabled=!(haskey && hasparas);
 				get_element('startbutton').disabled=!haskey;
-				estimate_query_cost();
 			}
 			
 			
@@ -261,7 +248,7 @@
 				}
 			}
 			
-			
+		
 		//	Panel 2: Add text
 			
 			function review_add_paras()
@@ -278,7 +265,7 @@
 				}
 				
 				estimate_add_cost();
-				
+
 				set_display('source', 'none');
 				set_display('review', 'block');
 				set_display('prereview', 'none');
@@ -347,7 +334,7 @@
 			{
 				display_base();
 				set_display('baseempty', 'none');
-				
+
 				paraindex=0;
 				update_progress();				
 				
@@ -381,7 +368,7 @@
 				
 				for (var i=0; i<length; i++) {
 					var key=localStorage.key(i);
-					
+
 					if (key_is_storage_paragraph(key)) {
 						var paragraph=key_extract_paragraph(key);
 						
@@ -397,7 +384,7 @@
 				var length=items.length;
 				for (var i=0; i<length; i++)
 					add_base_row(items[i].paragraph, items[i].result.embedding, items[i].result.created);
-				
+
 				set_display('baseempty', length ? 'none' : 'block');
 				set_display('baseheaders', length ? 'table-row' : 'none');
 			}
@@ -424,11 +411,11 @@
 				var cell=row.insertCell(-1);
 				cell.className='date';
 				cell.innerText=date.toDateString();
-				
+
 				var cell=row.insertCell(-1);
 				cell.className='time';
 				cell.innerText=date.toLocaleTimeString();
-				
+
 				var cell=row.insertCell(-1);
 				cell.className='buttons';
 				cell.innerHTML='<input type="submit" value="Delete" onclick="delete_item('+id+');">';
@@ -461,241 +448,61 @@
 				update_page();
 			}
 			
-			
-		//	Panel 4: Ask and chat
+
+		//	Panel 4: Ask questions
 		
 			function estimate_query_cost()
 			{
-				var elements=document.getElementsByClassName('question');
-				var question=elements.length ? elements[elements.length-1].value.trim() : '';
+				var question=get_element('question').value.trim();
 				
-				if (messages.length) // for follow-on questions, used number of tokens as returned by API + tokens for new question
-					var tokens=usedtokens+estimate_tokens(question);
-				else
-					var tokens=Math.min( // reference paragraphs
-						(parseInt(get_element('userefsval').value) || 1)*average_storage_tokens(), // number chosen by user...
-						references_max_usage*query_token_limit // ... constrained by maximum allowed
-					)+50+estimate_tokens(question); // prompt and question
+				if (question.length) {				
+					var tokens=
+						estimate_tokens(create_prompt(get_element('question').value, []))+ // prompt with question
+						(parseInt(get_element('useparas').value) || 1)*average_storage_tokens()+ // reference paragraphs
+						Math.ceil(Number(get_element('answerlen').value)*1000/750); // requested answer
 					
-				get_element('tokenlimitval').innerText=Math.ceil(tokens/query_token_limit*100)+'%'; // exclude requested answer in capacity
+					get_element('querycostval').innerText=format_cost(query_cost*(tokens/1000));
+					set_display('querycost', 'inline');
 				
-				tokens+=Math.ceil(Number(get_element('answerlen').value)*1000/750); // tokens in requested answer
-				
-				get_element('querycostval').innerText=format_cost(query_cost*(tokens/1000)); // include requested answer in cost
-			}
-			
-			function count_chat_questions()
-			{
-				var count=0;
-				
-				while (get_element('question-'+count))
-					count++;
-				
-				return count;
-			}
-			
-			function add_chat_question()
-			{
-				var count=count_chat_questions();
-				var tbody=get_element('chatrows');
-				
-				var row=tbody.insertRow(-1);
-				row.className='questionrow';
-				
-				var cell=row.insertCell(-1);
-				cell.colSpan=2;
-				cell.innerHTML='<textarea class="question" id="question-'+count+'" rows="2" oninput="estimate_query_cost();" onkeypress="return question_key_press(event);"></textarea>'
-			}
-			
-			function question_key_press(event)
-			{
-				if (event.key=='Enter') {
-					get_response();
-					return false;
-				}
-				
-				return true;
-			}
-			
-			function lock_chat_question()
-			{
-				set_display('footerrow', 'none');
-				
-				var count=count_chat_questions();
-				
-				if (count) {
-					var textarea=get_element('question-'+(count-1));
-					
-					textarea.value=textarea.value.trim();
-					textarea.style.height='1em';
-					textarea.style.height=(textarea.scrollHeight+8)+'px';
-					textarea.disabled=true;
-				}				
-			}
-			
-			function unlock_chat_question()
-			{
-				var count=count_chat_questions();
-				if (count)
-					get_element('question-'+(count-1)).disabled=false;
-					
-				set_display('footerrow', 'table-row');
-			}
-			
-			function focus_chat_question()
-			{
-				var count=count_chat_questions();
-				
-				if (count) {
-					var element=get_element('question-'+(count-1));
-					var length=element.value.length;
-					
-					element.focus();
-					element.setSelectionRange(length, length);
-				}
-			}
-			
-			function add_chat_answer(answer)
-			{
-				var tbody=get_element('chatrows');
-				
-				var row=tbody.insertRow(-1);
-				row.className='answerrow';
-				
-				var cell=row.insertCell(-1);
-				cell.colSpan=2;
-				
-				var textarea=document.createElement("textarea");
-				textarea.className='answer';
-				textarea.value=answer;
-				
-				cell.appendChild(textarea);
-				textarea.style.height=(textarea.scrollHeight+8)+'px';
-				textarea.disabled=true;
-			}
-			
-			function show_ref_paras()
-			{
-				set_display('refheader', 'table-row');
-				set_display('refrows', 'table-row');
-			}
-			
-			function click_clear_chat()
-			{
-				messages=[];
-				usedtokens=0;
-				
-				set_display('userefs', 'inline');
-				set_display('usedrefs', 'none');
-				
-				var tbody=get_element('chatrows');
-				tbody.innerHTML='';
-				
-				set_display('refheader', 'none');
-				set_display('refrows', 'none');
-				show_references([]);
-				
-				add_chat_question();
-				focus_chat_question();
-				estimate_query_cost();
+				} else
+					set_display('querycost', 'none');
 			}
 			
 			async function get_response()
 			{
-			
-			//	Retrieve the question and estimate tokens
-			
-				var count=count_chat_questions();
-				if (!count)
+				var question=get_element('question').value;
+				
+				set_status('Analyzing question...');
+				
+				var response=await (await fetch('https://api.openai.com/v1/embeddings', {
+					method: 'POST',
+					headers: {
+						'Authorization': api_authorization(),
+						'Content-Type': 'application/json'
+					},
+					body: JSON.stringify({
+						'model' : openai_embedding_model,
+						'input' : question
+					})
+				})).json();
+				
+				var embedding=response.data && response.data[0] && response.data[0].embedding;
+				
+				if (!embedding) {
+					report_api_error(response);
+					clear_status();
 					return;
-					
-				var question=get_element('question-'+(count-1)).value.trim();			
-				lock_chat_question();
+				}
+				
+				set_status('Selecting references...');
+				
+				var paragraphs=find_closest_paragraphs(embedding, parseInt(get_element('useparas').value) || 1);				
+
+				set_status('Asking question...');
 				
 				var maxtokens=Math.ceil(Number(get_element('answerlen').value)*1000/750);
 				
-			//	If this is the first question...
-				
-				if (count==1) {
-				
-				//	Get embeddings for question
-				
-					set_status('Analyzing input...');
-					
-					var response=await (await fetch('https://api.openai.com/v1/embeddings', {
-						method: 'POST',
-						headers: {
-							'Authorization': api_authorization(),
-							'Content-Type': 'application/json'
-						},
-						body: JSON.stringify({
-							'model' : openai_embedding_model,
-							'input' : question
-						})
-					})).json();
-					
-					var embedding=response.data && response.data[0] && response.data[0].embedding;
-				
-					if (!embedding) {
-						report_api_error(response);
-						clear_status();
-						unlock_chat_question();
-						return;
-					}
-					
-				//	Find best reference paragraphs and reduce if necessary
-					
-					set_status('Selecting references...');
-				
-					var paragraphs=find_closest_paragraphs(embedding, parseInt(get_element('userefsval').value) || 1);
-					var maxparatokens=references_max_usage*query_token_limit;
-					
-					while (paragraphs.length) { // ensure paragraphs don't use too many tokens out of the limit
-						var parajoined=paragraphs.join('\n\n');
-						var tokens=estimate_tokens(parajoined);
-						
-						if (tokens>maxparatokens)
-							paragraphs.length--; // remove last one (least relevant)
-						else
-							break;
-					}
-					
-				//	Build initial request in OpenAI chat format
-					
-					messages=[
-						{
-							'role': 'system',
-							'content': 'You are a helpful assistant that answers questions based only on provided references',
-						},
-						{
-							'role': 'user',
-							'content': 'First read these references:\n\n'+paragraphs.join('\n\n')+
-								'Then answer this question based only on those references:\n\n'+question,
-						}
-					];
-					
-			//	... otherwise just add this question and constrain the number of requested tokens (taking some wiggle room)
-				
-				} else {
-					messages.push({
-						'role': 'user',
-						'content': question
-					});
-					
-					maxtokens=Math.min(maxtokens, query_token_limit-usedtokens-20-Math.ceil(2*estimate_tokens(question)));
-				}
-				
-			//	Request the chat completion
-				
-				if (maxtokens<0) {
-					report_error('The chat has reached its maximum length. Please clear and start a new chat.');
-					unlock_chat_question();
-					return;
-				}
-					
-				set_status('Retrieving response...');
-				
-				var response=await (await fetch('https://api.openai.com/v1/chat/completions', {
+				var response=await (await fetch('https://api.openai.com/v1/completions', {
 					method: 'POST',
 					headers: {
 						'Authorization': api_authorization(),
@@ -703,48 +510,22 @@
 					},
 					body: JSON.stringify({
 						'model': openai_query_model,
-						'messages': messages,
+						'prompt': create_prompt(question, paragraphs),
 						'temperature': 0, // deterministic MAP
 						'max_tokens': maxtokens
 					})
 				})).json();
 				
 				clear_status();
-				
+
 				if (!response.choices) {
 					report_api_error(response);
-					unlock_chat_question();
 					return;
 				}
 				
-				var answer=response.choices[0].message.content.trim();
-			
-			//	Add to list of messages and store total used tokens
-				
-				messages.push({
-					'role': 'assistant',
-					'content': answer	
-				});
-				
-				usedtokens=response.usage.total_tokens;
-				
-			//	If this is the first question, set up information about used references
-				
-				if (count==1) {
-					get_element('usedrefsval').innerText=paragraphs.length;
-					show_references(paragraphs);
-					set_display('userefs', 'none');
-					set_display('usedrefs', 'inline');
-				}
-				
-			//	Show answer, next question field and update status footer
-				
-				add_chat_answer(answer);
-				add_chat_question();
-				focus_chat_question();
-				
-				estimate_query_cost();
-				set_display('footerrow', 'table-row');
+				get_element('questionbars').innerHTML=embedding_to_bars_html(embedding);
+				show_references(paragraphs);
+				get_element('answer').value=response.choices[0].text.trim();
 			}
 			
 			function find_closest_paragraphs(embedding, count)
@@ -754,10 +535,10 @@
 				
 				for (var i=0; i<length; i++) {
 					var key=localStorage.key(i);
-					
+
 					if (key_is_storage_paragraph(key)) {
 						var paragraph=key_extract_paragraph(key);
-						
+
 						items.push({
 							paragraph: paragraph,
 							score: compare_embeddings(embedding, get_storage_paragraph(paragraph).embedding)
@@ -781,9 +562,15 @@
 				return dotprod;
 			}
 			
+			function create_prompt(question, paragraphs)
+			{
+				return 'Answer the following question based on the paragraphs which follow: '+
+					question+'\n\n'+paragraphs.join('\n\n');
+			}
+			
 			function show_references(paragraphs)
 			{
-				var tbody=get_element('refrows');
+				var tbody=get_element('references');
 				tbody.innerHTML='';
 				
 				for (var i=0; i<paragraphs.length; i++) {
@@ -791,12 +578,16 @@
 					
 					var row=tbody.insertRow(-1);
 					
+					var cell=document.createElement("th");
+					cell.innerText=i ? '' : 'References:';
+					row.appendChild(cell);
+					
 					var cell=row.insertCell(-1);
 					cell.className='paragraph';
 					cell.innerText=paragraph;
 					
 					var cell=row.insertCell(-1);
-					cell.className='embedding';
+					cell.className='bars';
 					cell.innerHTML=embedding_to_bars_html(get_storage_paragraph(paragraph).embedding);
 				}
 			}
@@ -815,7 +606,7 @@
 				}
 				
 				inrequest=true; // poor man's mutex starts here
-				
+
 				var paragraph=parastoadd[paraindex];
 				var result=get_storage_paragraph(paragraph);
 				
@@ -869,14 +660,14 @@
 										add_storage_paragraph(paragraphs[index], data.data[index].embedding, time);
 										add_base_row(paragraphs[index], data.data[index].embedding, time);
 									}
-									
+
 									adjust_delay(0.75);
 									paraindex+=countparas;
 									update_progress();
 							
 								} else
 									adjust_delay(2); // exponential backoff
-								
+
 								inrequest=false;
 							}
 						);
@@ -923,7 +714,7 @@
 			function get_storage_paragraph(paragraph)
 			{
 				var rawitem=localStorage.getItem(embeds_storage_prefix+paragraph);
-				
+
 				return rawitem ? JSON.parse(rawitem) : null;
 			}
 			
@@ -971,7 +762,7 @@
 				return (tokens && count) ? (tokens/count) : 0;
 			}
 			
-			
+
 		//	Page utility functions
 			
 			function set_status(status)
@@ -998,7 +789,7 @@
 			
 			function format_cost(cost)
 			{
-				return (Math.ceil(cost*10000)/100).toFixed(2)+'c';
+				return '$'+(Math.ceil(cost*100)/100).toFixed(2);
 			}
 			
 			function get_element(id)
@@ -1018,10 +809,10 @@
 				
 				for (var index=0; index<embedding.length; index+=jump)
 					samples.push(embedding[index]);
-				
+
 				var min=Math.min.apply(null, samples);
 				var max=Math.max.apply(null, samples);
-				
+
 				var html='';
 				
 				for (var bar=0; bar<embedding_bars; bar++)
@@ -1059,7 +850,7 @@
 			}
 		
 		</script>
-	
+
 	</head>
 	<body onload="load_page();">
 		<div id="statusdiv">
@@ -1076,13 +867,13 @@
 					<li id="link1"><a href="#" onclick="set_stage(1);">1. Enter key</a></li>
 					<li id="link2"><a href="#" onclick="set_stage(2);">2. Add text</a></li>
 					<li id="link3"><a href="#" onclick="set_stage(3);">3. View base</a></li>
-					<li id="link4"><a href="#" onclick="set_stage(4);">4. Ask and chat</a></li>
+					<li id="link4"><a href="#" onclick="set_stage(4);">4. Ask questions</a></li>
 				</ol>
 			</header>
 			<main>
 				<div id="content1">
 					<p class="banner">
-						Enter your key to get started
+						Enter your key to started
 					</p>
 					<p class="haskey warning">
 						All queries are made with your OpenAI account. <br>
@@ -1135,7 +926,7 @@
 				</div>
 				<div id="content2">
 					<p class="banner">
-						Add to the knowledge base
+						Add to the knowledge base 
 					</p>
 					<p class="nokey warning">
 						Before you get started, please enter a key.
@@ -1207,58 +998,66 @@
 				</div>
 				<div id="content4">
 					<p class="banner">
-						Chat with knowledge base
+						Ask the knowledge base
 					</p>
 					<p class="nokey warning">
 						In order to ask a question, please enter a key.
 					</p>
-					<table id="chattable">
-						<tr id="headerrow">
-							<td colspan="2">
-								<span id="userefs">
-									Use up to
-									<input id="userefsval" type="text" value="10" oninput="estimate_query_cost();">
-									reference paragraphs.
-								</span>
-								<span id="usedrefs">
-									<a href="#refheader" onclick="show_ref_paras();"><span id="usedrefsval"></span> reference paragraphs</a>  used.
-								</span>
-								Respond with up to
+					<table id="query">
+						<tr>
+							<th>
+								Question:
+							</th>
+							<td>
+								<textarea id="question" oninput="estimate_query_cost();"></textarea>
+							</td>
+							<td id="questionbars" class="bars">
+							</td>
+						</tr>
+						<tr>
+							<th>
+							</th>
+							<td>
+								Answer with up to
 								<select id="answerlen" onchange="estimate_query_cost();">
 									<option value="10">10 words</option>
 									<option value="20">20 words</option>
 									<option value="50">50 words</option>
-									<option value="100">100 words</option>
+									<option value="100" selected>100 words</option>
 									<option value="200">200 words</option>
-									<option value="500" selected>500 words</option>
+									<option value="500">500 words</option>
 									<option value="1000">1000 words</option>
 								</select>
+								using
+								<input id="useparas" type="text" value="5" oninput="estimate_query_cost();">
+								references
+							</td>
+							<td>
 							</td>
 						</tr>
-						<tbody id="chatrows">
-						</tbody>
-						<tr class="questionrow" id="footerrow">
-							<td colspan="2">
+						<tr>
+							<th>
+							</th>
+							<td>
+								<input id="respondbutton" type="submit" value="Get Answer" onclick="get_response();">
 								<span id="querycost">
-									Chat length used:
-									<span id="tokenlimitval"></span>
-									(including references)
-									&mdash;
-									<a href="#" onclick="click_clear_chat();">Clear chat</a>
-									&mdash;
-									Cost of next query:
-									<span id="querycostval"></span>
-									&mdash;
-									<a href="https://beta.openai.com/account/usage" target="openai">Check balance</a>
+									(estimated cost <span id="querycostval"></span> &ndash; <a href="https://beta.openai.com/account/usage" target="openai">check balance</a>)
 								</span>
 							</td>
-						</tr>
-						<tr id="refheader">
-							<td colspan="2" class="banner">
-								Reference paragraphs used
+							<td>
 							</td>
 						</tr>
-						<tbody id="refrows">
+						<tr>
+							<th>
+								Answer:
+							</th>
+							<td>
+								<textarea id="answer"></textarea>
+							</td>
+							<td>
+							</td>
+						</tr>
+						<tbody id="references">
 						</tbody>
 					</table>
 				</div>

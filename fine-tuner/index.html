@@ -212,7 +212,7 @@
 					var tuning=tunings[i];					
 					if (tuning.fine_tuned_model) {
 						modelbases[tuning.fine_tuned_model]=tuning.model;
-						modelnames[tuning.fine_tuned_model]=extract_name(tuning.training_files[0].filename, tuning.fine_tuned_model);
+						modelnames[tuning.fine_tuned_model]=tuning_display_name(tuning);
 					}
 				}
 				
@@ -247,7 +247,7 @@
 					cell.innerText=date.toLocaleTimeString();
 					
 					var cell=row.insertCell(-1); // model name
-					cell.innerText=extract_name(tuning.training_files[0].filename, '(none)');
+					cell.innerText=tuning_display_name(tuning);
 					
 					var cell=row.insertCell(-1); // base model
 					cell.innerText=title_case(modelnames[tuning.model] || tuning.model);
@@ -257,8 +257,17 @@
 					cell.title='Click to view last event';
 					cell.innerText=title_case(tuning.status);
 					
-					const index=i; // to bind the current value into the function below
+					const index=i; // to bind the current value into the functions below
 					cell.addEventListener('click', function() { debug_tuning(index); } );
+					
+					/* (this removed because there doesn't seem to be a way to identify a tuning whose model was deleted
+					var cell=row.insertCell(-1); // delete
+					var input=document.createElement('input');
+					input.setAttribute('type', 'submit');
+					input.value='Delete';
+					input.addEventListener('click', function() { click_delete(index); } );
+					cell.appendChild(input);
+					*/
 					
 				//	List model for use if ready
 					
@@ -632,6 +641,27 @@
 				
 				report_success('Last event'+suffix+':\n\n'+message+others);
 			}
+			
+			async function click_delete(index)
+			{
+				var tuning=tunings[index];
+				var name=tuning_display_name(tuning);
+				
+				if (confirm('Are you sure you want to delete the model '+name+'?')) {
+					set_status('Deleting model...');
+
+					await fetch('https://api.openai.com/v1/models/'+tuning.fine_tuned_model, {
+						method: 'DELETE',
+						headers: {
+							'Authorization': api_authorization(),
+						},
+					});
+					
+					clear_status();
+					
+					get_tunings();
+				}
+			}
 		
 		
 		//	Panel 4: Use model
@@ -770,6 +800,11 @@
 					return string.substring(first+1, last);
 				else
 					return ifnone;
+			}
+			
+			function tuning_display_name(tuning)
+			{
+				return extract_name(tuning.training_files[0].filename, tuning.fine_tuned_model);
 			}
 			
 			function model_base_recursive(model)
