@@ -10,15 +10,16 @@
 	This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
 	without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 	
-	With thanks to the OpenAI team for creating GPT-3, giving it a clean API for fine tuning,
-	and enabling client-side API calls from the browser (cross-origin resource sharing).
+	With thanks to the OpenAI team for creating ChatGPT, GPT-3 and GPT-4, giving them a clean
+	API, and enabling client-side API calls from the browser (cross-origin resource sharing).
 -->
 <html lang="en">
 
 	<head>
 		<meta charset="UTF-8">
 		<meta name="viewport" content="width=device-width, initial-scale=1">
-		<title>TrainMyAI Knowledge Base - Build and use a GPT-3 knowledge base</title>
+		<title>TrainMyAI Knowledge Base - Custom ChatGPT for your Content</title>
+		<meta name="description" content="Create a knowledge base from your content, then use ChatGPT to ask questions about that content. Easy web interface, no coding required!">
 		
 		<style>
 			/* These two CSS styles are switched in the downloaded version. The pages are otherwise identical. */
@@ -866,14 +867,18 @@
 							(data) => {
 								if (data && data.data && data.data.length>=countparas) {
 									for (var index=0; index<countparas; index++) {
-										add_storage_paragraph(paragraphs[index], data.data[index].embedding, time);
+										if (!add_storage_paragraph(paragraphs[index], data.data[index].embedding, time)) { // local storage could reach capacity
+											stop_analyzing();
+											break;
+										}
+										
 										add_base_row(paragraphs[index], data.data[index].embedding, time);
 									}
 									
 									adjust_delay(0.75);
 									paraindex+=countparas;
 									update_progress();
-							
+									
 								} else
 									adjust_delay(2); // exponential backoff
 								
@@ -904,15 +909,24 @@
 			
 			function add_storage_paragraph(paragraph, embedding, time)
 			{
-				localStorage.setItem(embeds_storage_prefix+paragraph, JSON.stringify({
-					'embedding': embedding,
-					'created': time
-				}));
+				var success=true;
+				
+				try {
+					localStorage.setItem(embeds_storage_prefix+paragraph, JSON.stringify({
+						'embedding': embedding,
+						'created': time
+					}))
+				} catch (error) {
+					report_error('An error occurred when adding data to the browser\'s local storage, probably because it has reached capacity. Please try using fewer paragraphs or a different browser.');
+					success=false;
+				};
 				
 				localStorage.setItem('trainmyai_kb_tokens',
 					estimate_tokens(paragraph)+(parseFloat(localStorage.getItem('trainmyai_kb_tokens')) || 0));
 				localStorage.setItem('trainmyai_kb_paras',
 					1+(parseInt(localStorage.getItem('trainmyai_kb_paras')) || 0));
+					
+				return success;
 			}
 			
 			function has_storage_paragraph(paragraph)
