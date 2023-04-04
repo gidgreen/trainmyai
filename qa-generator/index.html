@@ -55,7 +55,8 @@
 			.steps li {line-height:150%; margin-bottom:0.5em;}
 			.fineprint {font-size:80%;}
 			.warning {color:#c00; margin:1em 0;}
-			
+			.sm-input { width: 60px; }
+
 			#textraw, #review {width:800px; max-width:90vw; margin:0.5em 0;}
 			#textraw {height:16em; padding:0.5em;}
 			#postreview {display:none;}
@@ -76,6 +77,10 @@
 			#output .setseparator {padding:1px; background-color:#ccc;}
 			#output .paraseparator {padding:0.5em;}
 			
+            #jsonl_output { display: none; width: 800px; overflow: scroll; height: 500px; font-family: monospace; 
+                font-size: 12px; text-align: left; white-space: nowrap; }
+            #jsonl_output.shown { display: block; }
+
 			/*
 			#output .source {font-size:80%; width:25%; vertical-align:middle; text-align:left;}
 			#output .gendate {font-size:80%; width:5%; vertical-align:middle; text-align:center;}
@@ -426,6 +431,23 @@
 				localStorage.setItem('trainmyai_trainraw_set', get_element('output').innerText); // innerText gives good tab-delimited text
 				window.open('../fine-tuner/', '_blank');
 			}
+
+            function generate_jsonl()
+            {
+                var prefix = document.querySelector("#lbPrefix").value;
+                var suffix = document.querySelector("#lbSuffix").value;
+                var lines = "";
+                document.querySelectorAll("tr").forEach((e) => {
+                    var question = e.querySelector(".question")?.innerText;
+                    if(question == null) return;
+                    var completion = prefix + e.querySelector(".answer").innerText + suffix;
+                    lines += JSON.stringify({prompt: question, completion}) + "\n";
+                });
+
+                var jsonOutputPane = document.getElementById("jsonl_output");
+                jsonOutputPane.classList.add("shown");
+                jsonOutputPane.innerText = lines;
+            }
 			
 
 		//	Generating process
@@ -775,12 +797,15 @@
 						<span id="delay" class="fineprint"></span>
 					</p>
 					<p id="finished">
-						<input type="submit" value="Copy this output to the TrainMyAI Fine Tuner" onclick="output_to_fine_tuner();">
+						Click to <input type="submit" value="Copy this output to the TrainMyAI Fine Tuner" onclick="output_to_fine_tuner();">
+                        or <input type="button" value="Generate JSONL from this output" onclick="generate_jsonl();"> using<br>
+                        <input class="sm-input" id="lbPrefix" type="text"> as completion prefix and <input class="sm-input" id="lbSuffix" type="text"> suffix.
 					</p>
 					<table id="output">
 						<tbody id="outputrows">
 						</tbody>
 					</table>
+                    <div id="jsonl_output"></div>
 				</div>
 			</main>
 			<footer>
