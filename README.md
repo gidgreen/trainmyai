@@ -1,13 +1,13 @@
 TrainMyAI
 =========
 
-[TrainMyAI](https://trainmy.ai/) is a suite of single web page applications for customizing and training GPT-3 via the [OpenAI API](https://openai.com/api/).
+[TrainMyAI](https://trainmy.ai/) is a suite of single web page applications for customizing and training ChatGPT and GPT-3 via the [OpenAI API](https://openai.com/api/).
 
 All of the tools run entirely within your web browser, so your key or data are never revealed to the server. The web pages can be downloaded and run from any location, including locally on your own computer.
 
 All of the source code is visible within the web pages, and can be forked from the [Github repository](https://github.com/gidgreen/trainmyai).
 
-With thanks to the OpenAI team for creating GPT-3, giving it a clean API, and enabling client-side API calls from the browser.
+With thanks to the OpenAI team for creating ChatGPT, GPT-3 and GPT-4, giving them a clean API, and enabling client-side API calls from the browser.
 
 
 License
