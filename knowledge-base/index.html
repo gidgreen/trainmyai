@@ -79,8 +79,10 @@
 			#refheader td {padding-top:2em;}
 			.questionrow td {padding-right:10%;}
 			.answerrow td {padding-left:10%;}
-			.question, .answer {width:100%; font-family:trebuchet ms,sans-serif; border:black 1px solid;}
-			.question:disabled, .answer:disabled {border:white 1px solid; color:black;}
+			.question, .answer {font-family:trebuchet ms,sans-serif; font-size:16px; text-align:left; padding:2px;}
+			.question {width:100%; border:black 1px solid;}
+			.question:disabled, .answer {border:white 1px solid; color:black; margin-bottom:6px;}
+			
 			#chattable .paragraph {padding:0.5em;}
 			#chattable .embedding {padding:0.5em; text-align:center; vertical-align:middle; white-space:nowrap;}
 			
@@ -469,6 +471,7 @@
 			{
 				var elements=document.getElementsByClassName('question');
 				var question=elements.length ? elements[elements.length-1].value.trim() : '';
+				var stream=(parseInt(get_element('stream').value)!=0);
 				
 				if (messages.length) // for follow-on questions, used number of tokens as returned by API + tokens for new question
 					var tokens=usedtokens+estimate_tokens(question);
@@ -482,7 +485,8 @@
 				
 				tokens+=Math.ceil(Number(get_element('answerlen').value)*1000/750); // tokens in requested answer
 				
-				get_element('querycostval').innerText=format_cost(query_cost*(tokens/1000)); // include requested answer in cost
+				var tokencost=query_cost+(stream ? embedding_cost : 0); // in streaming mode, we also get a used token count via embeddings API
+				get_element('querycostval').innerText=format_cost(tokencost*(tokens/1000)); // include requested answer in cost
 			}
 			
 			function count_chat_questions()
@@ -529,7 +533,7 @@
 					
 					textarea.value=textarea.value.trim();
 					textarea.style.height='1em';
-					textarea.style.height=(textarea.scrollHeight+8)+'px';
+					textarea.style.height=(textarea.scrollHeight+2)+'px';
 					textarea.disabled=true;
 				}				
 			}
@@ -556,7 +560,7 @@
 				}
 			}
 			
-			function add_chat_answer(answer)
+			function create_chat_answer()
 			{
 				var tbody=get_element('chatrows');
 				
@@ -566,13 +570,16 @@
 				var cell=row.insertCell(-1);
 				cell.colSpan=2;
 				
-				var textarea=document.createElement("textarea");
-				textarea.className='answer';
-				textarea.value=answer;
+				var div=document.createElement("div");
+				div.className='answer';
+				cell.appendChild(div);
 				
-				cell.appendChild(textarea);
-				textarea.style.height=(textarea.scrollHeight+8)+'px';
-				textarea.disabled=true;
+				return div;
+			}
+			
+			function set_chat_answer(div, content)
+			{
+				div.innerText=content;
 			}
 			
 			function show_ref_paras()
@@ -614,6 +621,7 @@
 				lock_chat_question();
 				
 				var maxtokens=Math.ceil(Number(get_element('answerlen').value)*1000/750);
+				var stream=(parseInt(get_element('stream').value)!=0);
 				
 			//	If this is the first question...
 				
@@ -649,7 +657,7 @@
 					set_status('Selecting references...');
 				
 					var paragraphs=find_closest_paragraphs(embedding, parseInt(get_element('userefsval').value) || 1);
-					var maxparatokens=references_max_usage*query_token_limit;
+					var maxparatokens=0.9*Math.min(references_max_usage*query_token_limit, query_token_limit-maxtokens); // 10% wiggle room
 					
 					while (paragraphs.length) { // ensure paragraphs don't use too many tokens out of the limit
 						var parajoined=paragraphs.join('\n\n');
@@ -693,41 +701,109 @@
 					unlock_chat_question();
 					return;
 				}
-					
-				set_status('Retrieving response...');
 				
-				var response=await (await fetch('https://api.openai.com/v1/chat/completions', {
+				if (stream)
+					set_status('Starting response...');
+				else
+					set_status('Retrieving response...');
+				
+				var request=await fetch('https://api.openai.com/v1/chat/completions', {
 					method: 'POST',
+					keepalive: true,
 					headers: {
 						'Authorization': api_authorization(),
 						'Content-Type': 'application/json',
+						'Accept': 'text/event-stream' // this doesn't appear to make a difference
 					},
 					body: JSON.stringify({
 						'model': openai_query_model,
 						'messages': messages,
 						'temperature': 0, // deterministic MAP
-						'max_tokens': maxtokens
+						'max_tokens': maxtokens,
+						'stream': stream
 					})
-				})).json();
+				});
+			
+			//	Logic for streaming mode
 				
-				clear_status();
+				if (stream) {
+					clear_status();
+					
+				//	Check and report on errors
+					
+					if (!request.ok) {
+						var response=await request.json();
+						report_api_error(response);
+						unlock_chat_question();
+						return;
+					}
+					
+				//	Read the response stream (server-sent events)
 				
-				if (!response.choices) {
-					report_api_error(response);
-					unlock_chat_question();
-					return;
+					var reader=request.body.getReader();
+					var decoder=new TextDecoder();
+					var answer='';
+					var answerelem=null;
+					
+					while (true) {
+						var {value, done}=await reader.read();
+						if (done)
+							break;
+						
+						var lines=decoder.decode(value).split('\n');
+						
+						for (var j=0; j<lines.length; j++) {
+							var line=lines[j];
+							
+							if (line.substring(0, 5)=='data:') {
+								try {
+									var data=JSON.parse(line.substring(5).trim());
+									var content=data.choices[0].delta.content;
+									
+									if (typeof(content)=='string') {
+										if (!answerelem)
+											answerelem=create_chat_answer();
+										
+										answer+=content;
+										set_chat_answer(answerelem, answer);
+									}
+								
+								} catch (error) { }
+							}
+						}
+					}
+				
+					if (!answer.length) {
+						report_error('The response contained no content, please try again.');
+						unlock_chat_question();
+						return;
+					}
+				
+			//	Logic for non-streaming mode
+				
+				} else {
+					var response=await request.json();
+					
+					clear_status();
+					
+					if (!response.choices) {
+						report_api_error(response);
+						unlock_chat_question();
+						return;
+					}
+					
+					var answer=response.choices[0].message.content.trim();
+					set_chat_answer(create_chat_answer(), answer);
+					
+					usedtokens=response.usage.total_tokens;	// available in non-streaming mode only
 				}
 				
-				var answer=response.choices[0].message.content.trim();
-			
-			//	Add to list of messages and store total used tokens
+			//	Add to list of messages
 				
 				messages.push({
 					'role': 'assistant',
 					'content': answer	
 				});
-				
-				usedtokens=response.usage.total_tokens;
 				
 			//	If this is the first question, set up information about used references
 				
@@ -738,11 +814,37 @@
 					set_display('usedrefs', 'inline');
 				}
 				
-			//	Show answer, next question field and update status footer
+			//	Show next question field
 				
-				add_chat_answer(answer);
 				add_chat_question();
 				focus_chat_question();
+				
+			//	If streaming, use embedding API to get used token count (response doesn't provide usage.total_tokens)
+				
+				if (stream) {
+					var content='';
+					for (var j=0; j<messages.length; j++)
+						content+=messages[j].content+'\n';
+					
+					var response=await(await fetch('https://api.openai.com/v1/embeddings', {
+						method: 'POST',
+						headers: {
+							'Authorization': api_authorization(),
+							'Content-Type': 'application/json'
+						},
+						body: JSON.stringify({
+							'model' : openai_embedding_model,
+							'input' : content
+						})
+					})).json();
+					
+					if (response.usage && response.usage.total_tokens)
+						usedtokens=response.usage.total_tokens+5*messages.length-3; // this formula found empirically
+					else
+						report_api_error(response);
+				}
+				
+			//	Update status footer
 				
 				estimate_query_cost();
 				set_display('footerrow', 'table-row');
@@ -1246,6 +1348,10 @@
 									<option value="200">200 words</option>
 									<option value="500" selected>500 words</option>
 									<option value="1000">1000 words</option>
+								</select>
+								<select id="stream" onchange="estimate_query_cost();">
+									<option value="1">as generated</option>
+									<option value="0">when complete</option>
 								</select>
 							</td>
 						</tr>
