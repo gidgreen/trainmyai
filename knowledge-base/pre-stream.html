@@ -1,0 +1,1301 @@
+<!DOCTYPE html>
+<!--
+	TrainMyAI copyright (c) Gideon Greenspan 2022-3
+	License: GPLv3 + visible attribution
+	
+	This program is free software: you can redistribute it and/or modify it under the terms
+	of the GNU General Public License v3 as published by the Free Software Foundation. However,
+	all modified copies must contain a link back to the trainmy.ai website, shown at all times.
+	
+	This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+	without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+	
+	With thanks to the OpenAI team for creating ChatGPT, GPT-3 and GPT-4, giving them a clean
+	API, and enabling client-side API calls from the browser (cross-origin resource sharing).
+-->
+<html lang="en">
+
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>TrainMyAI Knowledge Base - Custom ChatGPT for your Content</title>
+		<meta name="description" content="Create a knowledge base from your content, then use ChatGPT to ask questions about that content. Easy web interface, no coding required!">
+		
+		<style>
+			/* These two CSS styles are switched in the downloaded version. The pages are otherwise identical. */
+			.hidelocal {}
+			.showlocal {display:none;}
+			
+			header {display:flex; align-items:center; justify-content:space-between; padding:0.5em;}
+			body {font-family:trebuchet ms,sans-serif; font-size:18px; margin:0;}
+			a, a:visited {color:#009;}
+			#container {display:flex; flex-direction:column; min-height: 100vh;}
+			textarea {box-sizing:border-box; margin:0;}
+			
+			h1 {font-family:georgia,serif; font-size:64px; font-weight:normal; text-shadow: #aaa 3px 3px 4px; margin:0 8px;}
+			h1 a, h1 a:visited {text-decoration:none; color:black;}
+			.toolname {font-family:georgia,serif; font-size:22px; text-align:center; text-shadow: #aaa 1px 1px 2px; margin-top:4px;}
+			#stages {text-align:right; margin:0;}
+			#stages li {display:inline-block; width:8em; text-align:center; margin:8px; padding-bottom:4px; border-bottom:8px solid #ccf;}
+			#stages a {color:#009; text-decoration:none;}
+			#stages li.selected {border-color:#66c;}
+			
+			#statusdiv {display:none; position:fixed; width:100%; height:100%; align-items:center; justify-content:center;}
+			#status {padding:0.5em; background:#fcc;}
+			
+			main {flex:1; display:flex; flex-direction:column; align-items:center; padding:1em;}
+			main > div {display:none;}
+			main > div.selected {display:table-cell; text-align:center;}
+			footer {font-size:80%; margin-top:2em; display:flex; align-items:flex-end; gap:1em; padding:0.5em;}
+			#footerleft {flex:1; text-align:left;}
+			#footerright {flex:1; text-align:right;}
+			
+			.banner {font-size:200%;}
+			.steps {display:inline-block; text-align:left;}
+			.steps li {line-height:150%; margin-bottom:0.5em;}
+			.fineprint {font-size:80%;}
+			.warning {color:#c00; margin:1em 0;}
+			.paragraph {font-size:80%; text-align:left;}
+			
+			#textraw, #review {width:800px; max-width:90vw; margin:0.5em 0;}
+			#textraw {height:16em; padding:0.5em;}
+			#postreview {display:none;}
+			
+			#review {border:1px solid #ccc; border-collapse:collapse; padding:0 1px; max-height:20em; display:none; overflow-y:auto;}
+			#review td {border-bottom:1px solid #ccc; padding:0.25em 0.5em; font-size:75%; line-height:100%;}
+			#choosestart {display:none;}
+			
+			#base {width:1000px; max-width:90vw; border-collapse:collapse;}
+			#base td {padding:0.5em; border:1px solid #ccc;}
+			#base .embedding, #base .date, #base .time, #base .buttons {text-align:center; white-space:nowrap;}
+			#baseheaders td {font-weight:bold;}
+			
+			#chattable {width:90vw; max-width:800px;}
+			#userefsval {width:2em;}
+			#usedrefs {display:none;}
+			#querycost {font-size:80%;}
+			#headerrow td {padding-bottom:1em;}
+			#refheader, #refrows {display:none;}
+			#refheader td {padding-top:2em;}
+			.questionrow td {padding-right:10%;}
+			.answerrow td {padding-left:10%;}
+			.question, .answer {width:100%; font-family:trebuchet ms,sans-serif; border:black 1px solid;}
+			.question:disabled, .answer:disabled {border:white 1px solid; color:black;}
+			#chattable .paragraph {padding:0.5em;}
+			#chattable .embedding {padding:0.5em; text-align:center; vertical-align:middle; white-space:nowrap;}
+			
+			@media (max-width: 800px) {
+				h1 {font-size:48px;}
+			}
+				
+			@media (max-width: 640px) {
+				#stages {font-size:80%;}
+				#stages li {margin-top:4px; margin-bottom:4px;}
+			}
+		</style>
+		
+		<script>
+		
+		//	Some constants you might want to change
+		
+			const min_para_words=5; // ignore paragraphs shorter than this
+			const embeds_storage_prefix='trainmyai_kb_embeds: '; // localStorage keys, concatenated with paragraph itself
+			const openai_embedding_model='text-embedding-ada-002'; // which model to use to get embeddings
+			const openai_query_model='gpt-3.5-turbo'; // which model to use for queries
+			const embedding_cost=0.0004; // $ per 1000 tokens for embedding requests (based on https://openai.com/api/pricing/ in Jan 2023)
+			const query_cost=0.002; // $ per 1000 tokens for querying (based on https://openai.com/api/pricing/ in Mar 2023)
+			const query_token_limit=4096; // maximum number of tokens for entire chat
+			const references_max_usage=0.75; // don't allow reference paragraphs to use more than this proportion of total token limit
+			const embedding_max_batch=50; // how many embeddings to retrieve at once
+			const min_request_delay=500; // minimum milliseconds between requests
+			const embedding_bars=32; // how many bars to show in embedding fingerprint diagrams
+			const embedding_bar_width='0.3em'; // CSS width of each bar
+			
+		//	Global variables
+			
+			var haskey=false;
+			var models=[];
+			var interval=null;
+			var paragraphs=[];
+			var paraindex=0;
+			var inrequest=false;
+			var lastrequesttime=0;
+			var requestdelay=0;
+			var messages=[];
+			var usedtokens=0;
+			
+			
+		//	Page initialization
+							
+			async function load_page()
+			{
+				update_page();
+				await get_models();
+				display_base();
+				add_chat_question();
+				auto_stage();
+			}
+			
+			function auto_stage()
+			{
+				var stage=1;
+				
+				if (haskey) {
+					if (interval)
+						stage=3;
+					else if (has_paragraphs())
+						stage=4;
+					else
+						stage=2;
+				}
+				
+				set_stage(stage);
+			}
+			
+			function set_stage(stage)
+			{
+				for (var s=1; s<=4; s++) {
+					get_element('link'+s).className=(s==stage) ? 'selected' : '';
+					get_element('content'+s).className=(s==stage) ? 'selected' : '';
+				}
+				
+				if (stage==4)
+					focus_chat_question();
+			}
+			
+			async function get_models()
+			{
+				if (haskey) {
+					set_status('Checking key...');
+				
+					var response=await (await fetch('https://api.openai.com/v1/models', {
+						headers: {
+							'Authorization': api_authorization()
+						}
+					})).json();
+				
+					clear_status();
+				
+					if (response.data) {
+						models=response.data;
+						update_page();
+						
+					} else
+						report_api_error(response);
+				}
+			}
+			
+			function update_page()
+			{
+				apikey=localStorage.getItem('trainmyai_openai_key');
+				haskey=apikey ? true : false;
+				hasparas=has_paragraphs();
+				
+				if (haskey)
+					get_element('oldkey').value=apikey;
+					
+				var elements=document.getElementsByClassName('haskey');
+				for (var i=0; i<elements.length; i++)
+					elements[i].style.display=haskey ? 'block' : 'none';
+				
+				var elements=document.getElementsByClassName('nokey');
+				for (var i=0; i<elements.length; i++)
+					elements[i].style.display=haskey ? 'none' : 'block';
+				
+				if (interval) {
+					set_display('progress', 'block');
+					get_element('paratotal').innerText=parastoadd.length;
+					
+				} else {
+					set_display('progress', 'none');
+				}
+				
+				get_element('startbutton').disabled=!haskey;
+				estimate_query_cost();
+			}
+			
+			
+		//	Panel 1: Enter key
+			
+			async function verify_key()
+			{
+				var key=get_element('newkey').value.trim();
+				
+				if (key.length<8) {
+					report_error('Please enter the full key');
+					return;
+				}
+				
+				set_status('Verifying key...');
+				
+				var response=await (await fetch('https://api.openai.com/v1/models', {
+					headers: {
+						'Authorization': 'Bearer '+key
+					}
+				})).json();
+				
+				clear_status();
+				
+				if (response.data) {
+					report_success('Thank you. Your key has been verified and stored locally in your browser.');
+					
+					localStorage.setItem('trainmyai_openai_key', key);
+					get_element('newkey').value='';
+					
+					models=response.data;
+					update_page();
+					auto_stage();
+				
+				} else {
+					report_api_error(response);
+					get_element('newkey').value='';
+					get_element('newkey').focus();
+				}
+			}
+			
+			function remove_key()
+			{
+				if (confirm('Are you sure you want to remove your key? Access to your OpenAI account will be lost.')) {
+					localStorage.setItem('trainmyai_openai_key', '');
+					models=[];
+					update_page();
+				}
+			}
+			
+			
+		//	Panel 2: Add text
+			
+			function review_add_paras()
+			{
+				get_add_paras();
+				
+				var tbody=get_element('reviewrows');
+				tbody.innerHTML='';
+				
+				for (var i=0; i<parastoadd.length; i++) {
+					var row=tbody.insertRow(-1);				
+					var cell=row.insertCell(-1);
+					cell.innerText=parastoadd[i];
+				}
+				
+				estimate_add_cost();
+				
+				set_display('source', 'none');
+				set_display('review', 'block');
+				set_display('prereview', 'none');
+				set_display('postreview', 'inline');
+				set_display('choosestart', 'list-item');
+			}
+			
+			function get_add_paras()
+			{
+				parastoadd=[];
+				
+				if (get_element('reqblank').value=='1')
+					var rawparas=get_element('textraw').value.split(/\n\s*\n/);
+				else
+					var rawparas=get_element('textraw').value.split('\n');
+				
+				for (var i=0; i<rawparas.length; i++) {
+					var rawpara=rawparas[i].trim().replaceAll('\n', ' ');
+					
+					if (rawpara.charAt(rawpara.length-1)!='?')
+						if (rawpara.split(/\s+/).length>=min_para_words)
+							parastoadd.push(rawpara);
+				}
+			}
+			
+			function estimate_add_cost()
+			{
+				var tokens=0;
+				var stored=0;
+				
+				for (var i=0; i<parastoadd.length; i++) {
+					var paragraph=parastoadd[i];
+						
+					if (has_storage_paragraph(paragraph))
+						stored++;
+					else
+						tokens+=estimate_tokens(paragraph);
+				}
+				
+				if (stored) {
+					set_display('hasstored', 'inline');
+					set_display('nonestored', 'none');
+					get_element('storedpercent').innerText=Math.ceil(stored/(parastoadd.length)*100);
+				
+				} else {
+					set_display('hasstored', 'none');
+					set_display('nonestored', 'inline');
+				}
+				
+				get_element('costval').innerText=format_cost(embedding_cost*tokens/1000);
+			}
+			
+			function change_text()
+			{
+				set_display('review', 'none');
+				set_display('prereview', 'inline');
+				set_display('postreview', 'none');
+				set_display('choosestart', 'none');
+				
+				set_display('source', 'block');
+				get_element('textraw').select();
+				get_element('textraw').focus();
+			}
+			
+			function start_analyzing()
+			{
+				display_base();
+				set_display('baseempty', 'none');
+				
+				paraindex=0;
+				update_progress();				
+				
+				adjust_delay(0);
+				interval=setInterval(interval_timer, 10);
+				
+				update_page();
+				set_stage(3);
+			}
+			
+			function stop_analyzing()
+			{
+				if (interval) {
+					clearInterval(interval);
+					interval=null;
+				}
+				
+				update_page();
+			}
+			
+		
+		//	Panel 3: View base
+		
+			function display_base()
+			{
+				var tbody=get_element('baserows');
+				tbody.innerHTML='';
+				
+				var length=localStorage.length;
+				var items=[];
+				
+				for (var i=0; i<length; i++) {
+					var key=localStorage.key(i);
+					
+					if (key_is_storage_paragraph(key)) {
+						var paragraph=key_extract_paragraph(key);
+						
+						items.push({
+							paragraph: paragraph,
+							result: get_storage_paragraph(paragraph)
+						});
+					}
+				}
+				
+				items.sort(function(a,b) { return a.result.created-b.result.created; });
+				
+				var length=items.length;
+				for (var i=0; i<length; i++)
+					add_base_row(items[i].paragraph, items[i].result.embedding, items[i].result.created);
+				
+				set_display('baseempty', length ? 'none' : 'block');
+				set_display('baseheaders', length ? 'table-row' : 'none');
+			}
+			
+			function add_base_row(paragraph, embedding, created)
+			{
+				var tbody=get_element('baserows');
+				
+				var row=tbody.insertRow(-1);
+				var id=random_digits(15);
+				row.id=id;
+				row.paragraph=paragraph; // reference for deleting
+				
+				var cell=row.insertCell(-1);
+				cell.className='paragraph';
+				cell.innerText=paragraph;
+				
+				var cell=row.insertCell(-1);
+				cell.className='embedding';
+				cell.innerHTML=embedding_to_bars_html(embedding);
+				
+				var date=new Date(created);
+				
+				var cell=row.insertCell(-1);
+				cell.className='date';
+				cell.innerText=date.toDateString();
+				
+				var cell=row.insertCell(-1);
+				cell.className='time';
+				cell.innerText=date.toLocaleTimeString();
+				
+				var cell=row.insertCell(-1);
+				cell.className='buttons';
+				cell.innerHTML='<input type="submit" value="Delete" onclick="delete_item('+id+');">';
+				
+				set_display('baseempty', 'none');
+				set_display('baseheaders', 'table-row');
+			}
+			
+			function delete_all()
+			{
+				if (confirm('Are you sure you want to clear the entire knowledge base?')) {
+					var length=localStorage.length;
+					
+					for (var i=length-1; i>=0; i--) {
+						var key=localStorage.key(i);
+						if (key_is_storage_paragraph(key))
+							delete_storage_paragraph(key_extract_paragraph(key));
+					}
+					
+					display_base();
+					update_page();
+				}
+			}
+			
+			function delete_item(id)
+			{
+				var row=get_element(id);
+				delete_storage_paragraph(row.paragraph);
+				row.remove();
+				update_page();
+			}
+			
+			
+		//	Panel 4: Ask and chat
+		
+			function estimate_query_cost()
+			{
+				var elements=document.getElementsByClassName('question');
+				var question=elements.length ? elements[elements.length-1].value.trim() : '';
+				
+				if (messages.length) // for follow-on questions, used number of tokens as returned by API + tokens for new question
+					var tokens=usedtokens+estimate_tokens(question);
+				else
+					var tokens=Math.min( // reference paragraphs
+						(parseInt(get_element('userefsval').value) || 1)*average_storage_tokens(), // number chosen by user...
+						references_max_usage*query_token_limit // ... constrained by maximum allowed
+					)+50+estimate_tokens(question); // prompt and question
+					
+				get_element('tokenlimitval').innerText=Math.ceil(tokens/query_token_limit*100)+'%'; // exclude requested answer in capacity
+				
+				tokens+=Math.ceil(Number(get_element('answerlen').value)*1000/750); // tokens in requested answer
+				
+				get_element('querycostval').innerText=format_cost(query_cost*(tokens/1000)); // include requested answer in cost
+			}
+			
+			function count_chat_questions()
+			{
+				var count=0;
+				
+				while (get_element('question-'+count))
+					count++;
+				
+				return count;
+			}
+			
+			function add_chat_question()
+			{
+				var count=count_chat_questions();
+				var tbody=get_element('chatrows');
+				
+				var row=tbody.insertRow(-1);
+				row.className='questionrow';
+				
+				var cell=row.insertCell(-1);
+				cell.colSpan=2;
+				cell.innerHTML='<textarea class="question" id="question-'+count+'" rows="2" oninput="estimate_query_cost();" onkeypress="return question_key_press(event);"></textarea>'
+			}
+			
+			function question_key_press(event)
+			{
+				if (event.key=='Enter') {
+					get_response();
+					return false;
+				}
+				
+				return true;
+			}
+			
+			function lock_chat_question()
+			{
+				set_display('footerrow', 'none');
+				
+				var count=count_chat_questions();
+				
+				if (count) {
+					var textarea=get_element('question-'+(count-1));
+					
+					textarea.value=textarea.value.trim();
+					textarea.style.height='1em';
+					textarea.style.height=(textarea.scrollHeight+8)+'px';
+					textarea.disabled=true;
+				}				
+			}
+			
+			function unlock_chat_question()
+			{
+				var count=count_chat_questions();
+				if (count)
+					get_element('question-'+(count-1)).disabled=false;
+					
+				set_display('footerrow', 'table-row');
+			}
+			
+			function focus_chat_question()
+			{
+				var count=count_chat_questions();
+				
+				if (count) {
+					var element=get_element('question-'+(count-1));
+					var length=element.value.length;
+					
+					element.focus();
+					element.setSelectionRange(length, length);
+				}
+			}
+			
+			function add_chat_answer(answer)
+			{
+				var tbody=get_element('chatrows');
+				
+				var row=tbody.insertRow(-1);
+				row.className='answerrow';
+				
+				var cell=row.insertCell(-1);
+				cell.colSpan=2;
+				
+				var textarea=document.createElement("textarea");
+				textarea.className='answer';
+				textarea.value=answer;
+				
+				cell.appendChild(textarea);
+				textarea.style.height=(textarea.scrollHeight+8)+'px';
+				textarea.disabled=true;
+			}
+			
+			function show_ref_paras()
+			{
+				set_display('refheader', 'table-row');
+				set_display('refrows', 'table-row');
+			}
+			
+			function click_clear_chat()
+			{
+				messages=[];
+				usedtokens=0;
+				
+				set_display('userefs', 'inline');
+				set_display('usedrefs', 'none');
+				
+				var tbody=get_element('chatrows');
+				tbody.innerHTML='';
+				
+				set_display('refheader', 'none');
+				set_display('refrows', 'none');
+				show_references([]);
+				
+				add_chat_question();
+				focus_chat_question();
+				estimate_query_cost();
+			}
+			
+			async function get_response()
+			{
+			
+			//	Retrieve the question and estimate tokens
+			
+				var count=count_chat_questions();
+				if (!count)
+					return;
+					
+				var question=get_element('question-'+(count-1)).value.trim();			
+				lock_chat_question();
+				
+				var maxtokens=Math.ceil(Number(get_element('answerlen').value)*1000/750);
+				
+			//	If this is the first question...
+				
+				if (count==1) {
+				
+				//	Get embeddings for question
+				
+					set_status('Analyzing input...');
+					
+					var response=await (await fetch('https://api.openai.com/v1/embeddings', {
+						method: 'POST',
+						headers: {
+							'Authorization': api_authorization(),
+							'Content-Type': 'application/json'
+						},
+						body: JSON.stringify({
+							'model' : openai_embedding_model,
+							'input' : question
+						})
+					})).json();
+					
+					var embedding=response.data && response.data[0] && response.data[0].embedding;
+				
+					if (!embedding) {
+						report_api_error(response);
+						clear_status();
+						unlock_chat_question();
+						return;
+					}
+					
+				//	Find best reference paragraphs and reduce if necessary
+					
+					set_status('Selecting references...');
+				
+					var paragraphs=find_closest_paragraphs(embedding, parseInt(get_element('userefsval').value) || 1);
+					var maxparatokens=references_max_usage*query_token_limit;
+					
+					while (paragraphs.length) { // ensure paragraphs don't use too many tokens out of the limit
+						var parajoined=paragraphs.join('\n\n');
+						var tokens=estimate_tokens(parajoined);
+						
+						if (tokens>maxparatokens)
+							paragraphs.length--; // remove last one (least relevant)
+						else
+							break;
+					}
+					
+				//	Build initial request in OpenAI chat format
+					
+					messages=[
+						{
+							'role': 'system',
+							'content': 'You are a helpful assistant that answers questions based only on provided references',
+						},
+						{
+							'role': 'user',
+							'content': 'First read these references:\n\n'+paragraphs.join('\n\n')+
+								'Then answer this question based only on those references:\n\n'+question,
+						}
+					];
+					
+			//	... otherwise just add this question and constrain the number of requested tokens (taking some wiggle room)
+				
+				} else {
+					messages.push({
+						'role': 'user',
+						'content': question
+					});
+					
+					maxtokens=Math.min(maxtokens, query_token_limit-usedtokens-20-Math.ceil(2*estimate_tokens(question)));
+				}
+				
+			//	Request the chat completion
+				
+				if (maxtokens<0) {
+					report_error('The chat has reached its maximum length. Please clear and start a new chat.');
+					unlock_chat_question();
+					return;
+				}
+					
+				set_status('Retrieving response...');
+				
+				var response=await (await fetch('https://api.openai.com/v1/chat/completions', {
+					method: 'POST',
+					headers: {
+						'Authorization': api_authorization(),
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify({
+						'model': openai_query_model,
+						'messages': messages,
+						'temperature': 0, // deterministic MAP
+						'max_tokens': maxtokens
+					})
+				})).json();
+				
+				clear_status();
+				
+				if (!response.choices) {
+					report_api_error(response);
+					unlock_chat_question();
+					return;
+				}
+				
+				var answer=response.choices[0].message.content.trim();
+			
+			//	Add to list of messages and store total used tokens
+				
+				messages.push({
+					'role': 'assistant',
+					'content': answer	
+				});
+				
+				usedtokens=response.usage.total_tokens;
+				
+			//	If this is the first question, set up information about used references
+				
+				if (count==1) {
+					get_element('usedrefsval').innerText=paragraphs.length;
+					show_references(paragraphs);
+					set_display('userefs', 'none');
+					set_display('usedrefs', 'inline');
+				}
+				
+			//	Show answer, next question field and update status footer
+				
+				add_chat_answer(answer);
+				add_chat_question();
+				focus_chat_question();
+				
+				estimate_query_cost();
+				set_display('footerrow', 'table-row');
+			}
+			
+			function find_closest_paragraphs(embedding, count)
+			{
+				var length=localStorage.length;
+				var items=[];
+				
+				for (var i=0; i<length; i++) {
+					var key=localStorage.key(i);
+					
+					if (key_is_storage_paragraph(key)) {
+						var paragraph=key_extract_paragraph(key);
+						
+						items.push({
+							paragraph: paragraph,
+							score: compare_embeddings(embedding, get_storage_paragraph(paragraph).embedding)
+						});
+					}
+				}
+				
+				items.sort(function(a,b) { return b.score-a.score; });
+				
+				return items.slice(0, count).map(function(item) { return item.paragraph; });
+			}
+			
+			function compare_embeddings(embedding1, embedding2)
+			{
+				var length=Math.min(embedding1.length, embedding2.length); // defensive
+				var dotprod=0; // OpenAI documentation says vectors are normalized so dot product is fine
+				
+				for (var i=0; i<length; i++)
+					dotprod+=embedding1[i]*embedding2[i];
+					
+				return dotprod;
+			}
+			
+			function show_references(paragraphs)
+			{
+				var tbody=get_element('refrows');
+				tbody.innerHTML='';
+				
+				for (var i=0; i<paragraphs.length; i++) {
+					var paragraph=paragraphs[i];
+					
+					var row=tbody.insertRow(-1);
+					
+					var cell=row.insertCell(-1);
+					cell.className='paragraph';
+					cell.innerText=paragraph;
+					
+					var cell=row.insertCell(-1);
+					cell.className='embedding';
+					cell.innerHTML=embedding_to_bars_html(get_storage_paragraph(paragraph).embedding);
+				}
+			}
+			
+		
+		//	Analyzing process
+		
+			function interval_timer()
+			{
+				if (inrequest) // already in another request
+					return;
+					
+				if (paraindex>=parastoadd.length) { // finished the list
+					stop_analyzing();
+					return;
+				}
+				
+				inrequest=true; // poor man's mutex starts here
+				
+				var paragraph=parastoadd[paraindex];
+				var result=get_storage_paragraph(paragraph);
+				
+				if (result) {
+					add_base_row(paragraph, result.embedding, result.created);
+					paraindex++;
+					update_progress();
+					inrequest=false;
+				
+				} else {
+					var time=new Date().getTime();
+					
+					if ( (time-lastrequesttime)<requestdelay ) {
+						inrequest=false; // try again soon
+						
+					} else {
+						lastrequesttime=time;
+					
+						var paragraphs=[paragraph];
+					
+						for (var tryindex=paraindex+1; tryindex<parastoadd.length; tryindex++) {
+							paragraph=parastoadd[tryindex];
+							if (has_storage_paragraph(paragraph)) // stop if we find a known one ...
+								break;
+						
+							paragraphs.push(paragraph);
+							if (paragraphs.length>=embedding_max_batch) // ... or stop if batch big enough
+								break;
+						}
+						
+						var countparas=paragraphs.length;
+					
+						fetch('https://api.openai.com/v1/embeddings', {
+							method: 'POST',
+							headers: {
+								'Authorization': api_authorization(),
+								'Content-Type': 'application/json'
+							},
+							body: JSON.stringify({
+								'model' : openai_embedding_model,
+								'input' : paragraphs
+							})
+						}).then(
+							(response) => response.json()
+						).catch(error => {
+							; // silent error, just use exponential backoff
+						}).then(
+							(data) => {
+								if (data && data.data && data.data.length>=countparas) {
+									for (var index=0; index<countparas; index++) {
+										if (!add_storage_paragraph(paragraphs[index], data.data[index].embedding, time)) { // local storage could reach capacity
+											stop_analyzing();
+											break;
+										}
+										
+										add_base_row(paragraphs[index], data.data[index].embedding, time);
+									}
+									
+									adjust_delay(0.75);
+									paraindex+=countparas;
+									update_progress();
+									
+								} else
+									adjust_delay(2); // exponential backoff
+								
+								inrequest=false;
+							}
+						);
+					}
+				}
+			}
+			
+			function update_progress()
+			{
+				get_element('paranum').innerText=(1+paraindex);
+			}
+		
+			function adjust_delay(factor)
+			{
+				requestdelay=Math.max(min_request_delay, requestdelay*factor);
+				
+				if (requestdelay>min_request_delay)
+					get_element('delay').innerText='(min delay now '+(requestdelay/1000)+' seconds)';
+				else
+					get_element('delay').innerText='';
+			}
+			
+		
+		//	Managing stored paragraph embeddings
+			
+			function add_storage_paragraph(paragraph, embedding, time)
+			{
+				var success=true;
+				
+				try {
+					localStorage.setItem(embeds_storage_prefix+paragraph, JSON.stringify({
+						'embedding': embedding,
+						'created': time
+					}))
+				} catch (error) {
+					report_error('An error occurred when adding data to the browser\'s local storage, probably because it has reached capacity. Please try using fewer paragraphs or a different browser.');
+					success=false;
+				};
+				
+				localStorage.setItem('trainmyai_kb_tokens',
+					estimate_tokens(paragraph)+(parseFloat(localStorage.getItem('trainmyai_kb_tokens')) || 0));
+				localStorage.setItem('trainmyai_kb_paras',
+					1+(parseInt(localStorage.getItem('trainmyai_kb_paras')) || 0));
+					
+				return success;
+			}
+			
+			function has_storage_paragraph(paragraph)
+			{
+				return localStorage.getItem(embeds_storage_prefix+paragraph) ? true : false;
+			}
+			
+			function get_storage_paragraph(paragraph)
+			{
+				var rawitem=localStorage.getItem(embeds_storage_prefix+paragraph);
+				
+				return rawitem ? JSON.parse(rawitem) : null;
+			}
+			
+			function delete_storage_paragraph(paragraph)
+			{
+				if (has_storage_paragraph(paragraph)) {
+					localStorage.removeItem(embeds_storage_prefix+paragraph);
+				
+					var tokens=parseFloat(localStorage.getItem('trainmyai_kb_tokens'));
+					if (tokens)
+						localStorage.setItem('trainmyai_kb_tokens', tokens-estimate_tokens(paragraph));
+					
+					var count=parseInt(localStorage.getItem('trainmyai_kb_paras'));
+					if (count)
+						localStorage.setItem('trainmyai_kb_paras', count-1);
+				}
+			}
+			
+			function key_is_storage_paragraph(key)
+			{
+				return key.lastIndexOf(embeds_storage_prefix, 0)==0;
+			}
+			
+			function key_extract_paragraph(key)
+			{
+				return key.substring(embeds_storage_prefix.length);
+			}
+			
+			function has_paragraphs()
+			{
+				var length=localStorage.length;
+				
+				for (var i=0; i<length; i++)
+					if (key_is_storage_paragraph(localStorage.key(i)))
+						return true;
+				
+				return false;
+			}
+			
+			function average_storage_tokens()
+			{
+				var tokens=parseFloat(localStorage.getItem('trainmyai_kb_tokens'));
+				var count=parseInt(localStorage.getItem('trainmyai_kb_paras'));
+				
+				return (tokens && count) ? (tokens/count) : 0;
+			}
+			
+			
+		//	Page utility functions
+			
+			function set_status(status)
+			{
+				get_element('status').innerText=status;
+				set_display('statusdiv', 'flex');
+			}
+			
+			function clear_status()
+			{
+				set_display('statusdiv', 'none');
+				get_element('status').innerText='';
+			}
+			
+			function report_success(message)
+			{
+				alert(message);
+			}
+			
+			function report_error(error)
+			{
+				alert('Error: '+error);
+			}
+			
+			function format_cost(cost)
+			{
+				return (Math.ceil(cost*10000)/100).toFixed(2)+'c';
+			}
+			
+			function get_element(id)
+			{
+				return document.getElementById(id);
+			}
+			
+			function set_display(id, display)
+			{
+				get_element(id).style.display=display;
+			}
+					
+			function embedding_to_bars_html(embedding)
+			{
+				var jump=Math.floor(embedding.length/embedding_bars);
+				var samples=[];
+				
+				for (var index=0; index<embedding.length; index+=jump)
+					samples.push(embedding[index]);
+				
+				var min=Math.min.apply(null, samples);
+				var max=Math.max.apply(null, samples);
+				
+				var html='';
+				
+				for (var bar=0; bar<embedding_bars; bar++)
+					html+='<div style="display:inline-block; width:'+embedding_bar_width+'; background-color:hsl(240 0% '+
+						(40+((samples[bar]-min)/(max-min)*50))+'%);">&nbsp;</div>';
+				
+				return html;
+			}
+			
+			
+		//	API/utility functions
+			
+			function api_authorization()
+			{
+				return 'Bearer '+localStorage.getItem('trainmyai_openai_key');
+			}
+			
+			function estimate_tokens(string)
+			{
+				// According to https://openai.com/api/pricing/, 1000 tokens is about 750 words
+				
+				return 1+(string.split(/\b\W+\b/).length*1000/750); // add 1 for luck
+			}
+			
+			function random_digits(digits)
+			{
+				var tens=Math.pow(10, digits-1); // works up to 16
+				
+				return Math.floor(tens+Math.random()*9*tens);
+			}
+			
+			function report_api_error(response)
+			{
+				alert('Error from OpenAI: '+response.error.code+'\n'+response.error.message);
+			}
+		
+		</script>
+	
+	</head>
+	<!-- remove from download start -->
+	
+	<!-- Google tag (gtag.js) -->
+	<script async src="https://www.googletagmanager.com/gtag/js?id=G-C77Y7D8LHL"></script>
+	<script>
+	  window.dataLayer = window.dataLayer || [];
+	  function gtag(){dataLayer.push(arguments);}
+	  gtag('js', new Date());
+	  gtag('config', 'G-C77Y7D8LHL');
+	</script>
+	
+	<!-- remove from download end --><body onload="load_page();">
+		<div id="statusdiv">
+			<span id="status">
+			</span>
+		</div>
+		<div id="container">
+			<header>
+				<div>
+					<h1><a href="../">TrainMyAI</a></h1>
+					<div class="toolname">Knowledge Base</div>
+				</div>
+				<ol id="stages">
+					<li id="link1"><a href="#" onclick="set_stage(1);">1. Enter key</a></li>
+					<li id="link2"><a href="#" onclick="set_stage(2);">2. Add text</a></li>
+					<li id="link3"><a href="#" onclick="set_stage(3);">3. View base</a></li>
+					<li id="link4"><a href="#" onclick="set_stage(4);">4. Ask and chat</a></li>
+				</ol>
+			</header>
+			<main>
+				<div id="content1">
+					<p class="banner">
+						Enter your key to get started
+					</p>
+					<p class="haskey warning">
+						All queries are made with your OpenAI account. <br>
+						If you remove the API key, no more usage will be possible.
+					</p>
+					<p class="haskey">
+						Key:
+						<input id="oldkey" type="password" size="30">
+						<input type="submit" value="Remove Key" onclick="remove_key();">
+					</p>
+					<div class="nokey">
+						<div class="steps">
+							Welcome to the TrainMyAI Knowledge Base. This lets you build a <br>
+							knowledge base from some text, then ask it questions. To get started:
+							<ol>
+								<li>
+									<a href="https://beta.openai.com/signup" target="openai">Sign up</a> for the OpenAPI beta or
+									<a href="https://beta.openai.com/login/" target="openai">log in</a> if you have an account. <br>
+									<span class="fineprint">When signing up, OpenAI gives you $18 in free credits which last for 3 months.</span>
+								</li>
+								<li>
+									Go to the <a href="https://beta.openai.com/account/api-keys" target="openai">API keys</a> page in your OpenAI account.
+								</li>
+								<li>
+									Click the button to create a new key and <b>do not click OK yet.</b> <br>
+									<span class="fineprint">(If you clicked OK by mistake, just click to create another new key.)</span>
+								</li>
+								<li>
+									Click the icon next to the key to copy it and then paste it here: <br>
+									<input id="newkey" type="password" value="" size="30">
+									<span class="fineprint"><br>
+									Your key is only seen by your own web browser &ndash; please see notes below.</span>
+								</li>
+								<li>
+									Click to <input type="submit" value="Verify Key" onclick="verify_key();">
+								</li>
+							</ol>
+						</div>
+					</div>
+					<p class="fineprint">
+						This is a one-page web application that runs locally in your web browser. <br>
+						<span class="hidelocal">
+							Our server delivers the page but never sees your key, data or queries. <br>
+							If you prefer, you can <a href="../download.php?knowledge-base">download this page</a> and open it on your own computer.
+						</span>
+						<span class="showlocal">
+							It was downloaded from <a href="https://trainmy.ai/">TrainMyAI</a> and may not be the latest version.
+						</span>
+					</p>
+				</div>
+				<div id="content2">
+					<p class="banner">
+						Add to the knowledge base
+					</p>
+					<p class="nokey warning">
+						Before you get started, please enter a key.
+					</p>
+					<div class="steps">
+						<ol>
+							<li>
+								Copy the source text and paste it below: <br>
+								<div id="source">
+									<textarea id="textraw"></textarea> <br>
+									Paragraphs are separated by
+									<select id="reqblank">
+										<option value="0">Single returns</option>
+										<option value="1">Blank lines</option>
+									</select>
+								</div>
+							</li>
+							<li>
+								<span id="prereview">
+									Click to <input type="submit" value="Review Paragraphs" onclick="review_add_paras();"> before starting.
+									Short sentences and questions will be removed.
+								</span>
+								<span id="postreview">Review your paragraphs below: <br></span>
+								<table id="review">
+									<tbody id="reviewrows">
+									</tbody>
+								</table>
+							</li>
+							<li id="choosestart">
+								Click to <input id="editbutton" type="submit" value="Change Text" onclick="change_text();">
+								or <input id="startbutton" type="submit" value="Start Analyzing" onclick="start_analyzing();">
+								<br>
+								<span class="fineprint">
+									<span id="hasstored">
+										<span id="storedpercent"></span>% of these sets are already stored, so the estimated cost is only
+									</span>
+									<span id="nonestored">
+										Estimated cost:
+									</span>
+									<span id="costval"></span> &ndash; <a href="https://beta.openai.com/account/usage" target="openai">check balance</a>
+								</span>
+							</li>
+						</ol>
+					</div>
+				</div>
+				<div id="content3">
+					<p class="banner">
+						View the knowledge base
+					</p>
+					<p id="progress">
+						Analyzing paragraph <span id="paranum"></span> of <span id="paratotal"></span>&#8230;
+						<input type="submit" value="Stop Analyzing" onclick="stop_analyzing();">
+						<span id="delay" class="fineprint"></span>
+					</p>
+					<p id="baseempty" class="warning">
+						The knowledge base is currently empty. Please add some text.
+					</p>
+					<table id="base">
+						<tr id="baseheaders">
+							<td>Paragraph</td>
+							<td>Fingerprint</td>
+							<td>Date</td>
+							<td>Time</td>
+							<td><input id="deleteall" type="submit" value="Delete All" onclick="delete_all();"></td>
+						</tr>
+						<tbody id="baserows">
+						</tbody>
+					</table>
+				</div>
+				<div id="content4">
+					<p class="banner">
+						Chat with knowledge base
+					</p>
+					<p class="nokey warning">
+						In order to ask a question, please enter a key.
+					</p>
+					<table id="chattable">
+						<tr id="headerrow">
+							<td colspan="2">
+								<span id="userefs">
+									Use up to
+									<input id="userefsval" type="text" value="10" oninput="estimate_query_cost();">
+									reference paragraphs.
+								</span>
+								<span id="usedrefs">
+									<a href="#refheader" onclick="show_ref_paras();"><span id="usedrefsval"></span> reference paragraphs</a>  used.
+								</span>
+								Respond with up to
+								<select id="answerlen" onchange="estimate_query_cost();">
+									<option value="10">10 words</option>
+									<option value="20">20 words</option>
+									<option value="50">50 words</option>
+									<option value="100">100 words</option>
+									<option value="200">200 words</option>
+									<option value="500" selected>500 words</option>
+									<option value="1000">1000 words</option>
+								</select>
+							</td>
+						</tr>
+						<tbody id="chatrows">
+						</tbody>
+						<tr class="questionrow" id="footerrow">
+							<td colspan="2">
+								<span id="querycost">
+									Chat length used:
+									<span id="tokenlimitval"></span>
+									(including references)
+									&mdash;
+									<a href="#" onclick="click_clear_chat();">Clear chat</a>
+									&mdash;
+									Cost of next query:
+									<span id="querycostval"></span>
+									&mdash;
+									<a href="https://beta.openai.com/account/usage" target="openai">Check balance</a>
+								</span>
+							</td>
+						</tr>
+						<tr id="refheader">
+							<td colspan="2" class="banner">
+								Reference paragraphs used
+							</td>
+						</tr>
+						<tbody id="refrows">
+						</tbody>
+					</table>
+				</div>
+			</main>
+			<footer>
+				<div id="footerleft">
+					Subject to <a href="https://openai.com/api/policies/terms/" target="openai">OpenAI Terms of Use</a>.
+				</div>
+				<div id="footerright">
+					&copy; <a href="https://trainmy.ai/">TrainMyAI</a> &ndash; <a href="http://www.gidgreen.com/contact.php">Send Feedback</a>
+				</div>
+			</footer>
+		</div>
+	</body>
+</html>
