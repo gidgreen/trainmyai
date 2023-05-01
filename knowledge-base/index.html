@@ -444,12 +444,17 @@
 			{
 				if (confirm('Are you sure you want to clear the entire knowledge base?')) {
 					var length=localStorage.length;
+					var delparas=[]; // separate collection and deletion stages since it seems order can be changed by deletion
 					
-					for (var i=length-1; i>=0; i--) {
+					for (var i=0; i<length; i++) {
 						var key=localStorage.key(i);
 						if (key_is_storage_paragraph(key))
-							delete_storage_paragraph(key_extract_paragraph(key));
+							delparas.push(key_extract_paragraph(key));
 					}
+					
+					var length=delparas.length;
+					for (var i=0; i<length; i++)
+						delete_storage_paragraph(delparas[i]);
 					
 					display_base();
 					update_page();
