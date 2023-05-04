@@ -685,41 +685,101 @@
 			
 			async function get_response()
 			{
+			
+			//	Retrieve the necessary field values
+			
 				var model=get_element('models').value;
 				var prompt=get_element('prompt').value.trim();
 				var maxtokens=Math.ceil(Number(get_element('respondlen').value)*1000/750);
+				var stream=(parseInt(get_element('stream').value)!=0);
 				
-				set_status('Processing request...');
+			//	Request the prompt completion
 				
-				var response=await (await fetch('https://api.openai.com/v1/completions', {
+				if (stream)
+					set_status('Starting request...');
+				else
+					set_status('Processing request...');
+				
+				var request=await fetch('https://api.openai.com/v1/completions', {
 					method: 'POST',
 					headers: {
 						'Authorization': api_authorization(),
 						'Content-Type': 'application/json',
+						'Accept': 'text/event-stream' // this doesn't appear to make a difference
 					},
 					body: JSON.stringify({
 						'model': model,
 						'prompt': prompt+prompt_end,
 						'temperature': 0, // deterministic MAP for now
 						'stop': completion_end,
-						'max_tokens': maxtokens
+						'max_tokens': maxtokens,
+						'stream': stream
 					})
-				})).json();
+				});
 				
-				clear_status();
+			//	Logic for streaming mode
 				
-				if (!response.choices) {
-					report_api_error(response);
-					return;
+				if (stream) {
+					clear_status();
+					
+				//	Check and report on errors
+				
+					if (!request.ok) {
+						var response=await request.json();
+						report_api_error(response);
+						return;
+					}
+					
+				//	Read the response stream (server-sent events)
+				
+					var reader=request.body.getReader();
+					var decoder=new TextDecoder();
+					var text='';
+					
+					while (true) {
+						var {value, done}=await reader.read();
+						if (done)
+							break;
+						
+						var lines=decoder.decode(value).split('\n');
+						
+						for (var j=0; j<lines.length; j++) {
+							var line=lines[j];
+							
+							if (line.substring(0, 5)=='data:') {
+								try {
+									var data=JSON.parse(line.substring(5).trim());
+									var content=data.choices[0].text;
+									
+									if (typeof(content)=='string') {
+										text+=content;
+										show_completion_text(text);
+									}
+								
+								} catch (error) { }
+							}
+						}
+					}
+				
+					if (!text.length) {
+						report_error('The response contained no content, please try again.');
+						return;
+					}
+
+			//	Logic for non-streaming mode
+				
+				} else {
+					var response=await request.json();
+					clear_status();
+					
+					if (!response.choices) {
+						report_api_error(response);
+						return;
+					}
+					
+					var text=response.choices[0].text.trim();
+					show_completion_text(text);
 				}
-				
-				var text=response.choices[0].text.trim();
-
-				var endcheck=text.indexOf(completion_end); // extra check for this artifact in output
-				if (endcheck>0)
-					text=text.substring(0, endcheck);
-
-				get_element('completion').value=text;
 			}
 			
 			
@@ -818,6 +878,15 @@
 			function report_api_error(response)
 			{
 				alert('Error from OpenAI: '+response.error.code+'\n'+response.error.message);
+			}
+			
+			function show_completion_text(text)
+			{
+				var endcheck=text.indexOf(completion_end); // extra check for this artifact in output
+				if (endcheck>0)
+					text=text.substring(0, endcheck);
+
+				get_element('completion').value=text.trim();
 			}
 		
 		</script>
@@ -1051,6 +1120,25 @@
 						</tr>
 						<tr>
 							<th>
+							</th>
+							<td>
+								<select id="respondlen" onchange="estimate_query();">
+									<option value="10">Up to 10 words</option>
+									<option value="20">Up to 20 words</option>
+									<option value="50">Up to 50 words</option>
+									<option value="100" selected>Up to 100 words</option>
+									<option value="200">Up to 200 words</option>
+									<option value="500">Up to 500 words</option>
+									<option value="1000">Up to 1000 words</option>
+								</select>
+								<select id="stream">
+									<option value="1">as generated</option>
+									<option value="0">when complete</option>
+								</select>
+							</td>
+						</tr>
+						<tr>
+							<th>
 								Prompt:
 							</th>
 							<td>
@@ -1059,18 +1147,8 @@
 						</tr>
 						<tr>
 							<th>
-								Response limit:
 							</th>
 							<td>
-								<select id="respondlen" onchange="estimate_query();">
-									<option value="10">Approx 10 words</option>
-									<option value="20">Approx 20 words</option>
-									<option value="50">Approx 50 words</option>
-									<option value="100" selected>Approx 100 words</option>
-									<option value="200">Approx 200 words</option>
-									<option value="500">Approx 500 words</option>
-									<option value="1000">Approx 1000 words</option>
-								</select>
 								<input id="respondbutton" type="submit" value="Get Response" onclick="get_response();">
 								<span id="querycost">
 									(estimated cost <span id="querycostval"></span> &ndash; <a href="https://beta.openai.com/account/usage" target="openai">check balance</a>)
